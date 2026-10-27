@@ -7,3 +7,4 @@ src-tauri/binaries/*.exe
 *.log
 # Local notes, kept off GitHub.
 /docs/
+/CLAUDE.md
