@@ -964,6 +964,20 @@ input {
   width: 16px;
   height: 16px;
 }
+/* A short note in a bar panel (what this system cannot do). */
+.cb-note {
+  margin: 2px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.cb-note.warn {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
 .cb-empty {
   margin: 0;
   padding: 2px 8px;
@@ -1004,9 +1018,11 @@ input {
 .ov.paused {
   --frame: #9ca3af;
 }
-/* Four edges, so the frame can trace itself around the area (GSAP). */
+/* Four edges, so the frame can trace itself around the area (GSAP). The overlay is a centring
+   grid: edges stretch themselves, or they would shrink to nothing there. */
 .ov-edge {
   position: absolute;
+  place-self: stretch;
   background: var(--frame);
   transition: background 0.25s var(--ease);
 }

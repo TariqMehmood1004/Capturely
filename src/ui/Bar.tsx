@@ -2,7 +2,7 @@ import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect } from "../core/recorder";
 import type { AfterClick } from "../core/zoom";
-import { errorMessage, platform, type CaptureTargets, type ScreenArea, type TakeData } from "../platform";
+import { errorMessage, platform, type CaptureTargets, type PlatformInfo, type ScreenArea, type TakeData } from "../platform";
 import {
   ArrowPathIcon,
   CheckIcon,
@@ -65,9 +65,12 @@ function loadPrefs(): Prefs {
   }
 }
 
+/** A microphone format this engine records (WebView2 and WebKitGTK: WebM/Opus; macOS WebKit: MP4). */
+const micType = (): string => ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4", "audio/webm"].find((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+
 /** One MediaRecorder streaming its chunks, in order, into a raw file. */
 function sink(stream: MediaStream, path: string, mime: string) {
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 8_000_000 });
+  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 8_000_000 } : { videoBitsPerSecond: 8_000_000 });
   let chain = Promise.resolve();
   let failed: unknown = null;
   rec.ondataavailable = (e) => {
@@ -150,6 +153,16 @@ export default function Bar() {
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
   const [targets, setTargets] = useState<CaptureTargets | null>(null);
+  // What this system can record (Windows: everything; Linux and macOS: see sys/mod.rs).
+  const [caps, setCaps] = useState<PlatformInfo>({ os: "windows", systemAudio: true, windowCapture: true, hidesFromCapture: true, blocked: null });
+  useEffect(() => {
+    void platform
+      .info()
+      .then(setCaps)
+      .catch(() => undefined);
+  }, []);
+  /** What is recorded: a saved window choice falls back to the screen where windows cannot be. */
+  const src = caps.windowCapture ? surface : "monitor";
   const [monitorIdx, setMonitorIdx] = useState(0);
   const [windowId, setWindowId] = useState("");
   const [script, setScript] = useState("");
@@ -168,6 +181,20 @@ export default function Bar() {
   const camVideo = useRef<HTMLVideoElement | null>(null);
   const meter = useRef<HTMLSpanElement | null>(null);
   const cancelled = useRef(false);
+  /** What the overlay should show now; sent again whenever it (re)loads, so nothing is missed. */
+  const overlayState = useRef<{ frame: boolean; n: number | null; paused: boolean }>({ frame: false, n: null, paused: false });
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    void platform.overlay
+      .onReady(() => {
+        const s = overlayState.current;
+        platform.overlay.frame(s.frame);
+        if (s.n !== null) platform.overlay.tick(s.n);
+        if (s.paused) platform.overlay.paused(true);
+      })
+      .then((u) => (off = u));
+    return () => off?.();
+  }, []);
   const lifted = useRef(false);
   const settleTimer = useRef(0);
 
@@ -379,7 +406,7 @@ export default function Bar() {
     r.sinks = [];
     if (r.micStream) {
       const path = await platform.rawStart("mic");
-      r.sinks.push({ kind: "mic", path, sink: sink(r.micStream, path, "audio/webm;codecs=opus") });
+      r.sinks.push({ kind: "mic", path, sink: sink(r.micStream, path, micType()) });
     }
     if (r.camStream) {
       const path = await platform.rawStart("camera");
@@ -390,7 +417,7 @@ export default function Bar() {
   /** The screen the overlay covers first: the chosen display, or the main one for a window. */
   const countdownArea = (): ScreenArea | null => {
     const list = targets?.monitors ?? [];
-    const m = (surface === "monitor" ? list.find((x) => x.index === monitorIdx) : undefined) ?? list.find((x) => x.primary) ?? list[0];
+    const m = (src === "monitor" ? list.find((x) => x.index === monitorIdx) : undefined) ?? list.find((x) => x.primary) ?? list[0];
     return m ? { x: m.x, y: m.y, width: m.width, height: m.height } : null;
   };
 
@@ -400,19 +427,22 @@ export default function Bar() {
     setPhase("countdown");
     cancelled.current = false;
     const area = countdownArea();
-    const ready = platform.overlay.ready(1500);
+    const ready = platform.overlay.ready(2500);
     // null: no overlay; false: shown but Windows would record it, so no frame is drawn.
     const safe = area ? await platform.overlay.open(area).catch(() => null) : null;
+    overlayState.current = { frame: safe === true, n: null, paused: false };
     if (safe !== null) {
       await ready;
       platform.overlay.frame(safe);
     }
     for (let n = countdown; n > 0; n--) {
       setCount(n);
+      overlayState.current.n = n;
       platform.overlay.tick(n);
       await new Promise((res) => setTimeout(res, 1000));
       if (cancelled.current) throw new DOMException("Cancelled", "AbortError");
     }
+    overlayState.current.n = 0;
     platform.overlay.tick(0);
     Object.assign(r, { t0: now(), pausedAt: null, pausedTotal: 0, pauses: [], markers: [] });
     setPaused(false);
@@ -420,8 +450,8 @@ export default function Bar() {
     setMarkers(0);
     setOverLimit(false);
     r.sinks.forEach((x) => x.sink.rec.start(1000));
-    r.rect = await platform.captureStart({ kind: surface, monitor: monitorIdx, window: windowId, fps, cursor, systemAudio });
-    if (surface === "window" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
+    r.rect = await platform.captureStart({ kind: src, monitor: monitorIdx, window: windowId, fps, cursor, systemAudio: caps.systemAudio && systemAudio });
+    if (src === "window" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
     if (clickZoom || ripples) await platform.clickLogStart().catch(() => undefined);
     setPhase("recording");
   };
@@ -438,7 +468,7 @@ export default function Bar() {
   const start = async () => {
     setError(null);
     setPanel(null);
-    if (surface === "window" && !windowId) return setError("Choose the window to record.");
+    if (src === "window" && !windowId) return setError("Choose the window to record.");
     const free = await platform.freeSpace().catch(() => Number.POSITIVE_INFINITY);
     if (free < MIN_FREE) return setError(`Only ${(free / 1e9).toFixed(1)} GB is free in your Videos folder. Free at least 1.5 GB and try again.`);
     const r: Run = { streams: [], micStream: null, camStream: null, sinks: [], take: "", rect: null, t0: 0, pausedAt: null, pausedTotal: 0, pauses: [], markers: [] };
@@ -469,12 +499,14 @@ export default function Bar() {
       r.sinks.forEach((x) => x.sink.rec.resume());
       void platform.capturePause(false).catch((e: unknown) => setError(errorMessage(e)));
       platform.overlay.paused(false);
+      overlayState.current.paused = false;
       setPaused(false);
     } else {
       r.pausedAt = now();
       r.sinks.forEach((x) => x.sink.rec.pause());
       void platform.capturePause(true).catch(() => undefined);
       platform.overlay.paused(true);
+      overlayState.current.paused = true;
       setPaused(true);
     }
   };
@@ -537,7 +569,7 @@ export default function Bar() {
         width: area.width,
         height: area.height,
         fps,
-        source: surface,
+        source: src,
         clicks: log ? onRecording(log.clicks, area, r.pauses) : [],
         path: log ? onRecording(log.moves, area, r.pauses) : [],
         markers: r.markers,
@@ -572,7 +604,7 @@ export default function Bar() {
   const monitor = targets?.monitors.find((m) => m.index === monitorIdx);
   const win = targets?.windows.find((w) => w.id === windowId);
   const short = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
-  const sourceLabel = surface === "window" ? (win ? short(win.title, 22) : "Window") : monitor ? `Screen ${monitor.index + 1}${monitor.primary ? " (Primary)" : ""}` : "Screen";
+  const sourceLabel = src === "window" ? (win ? short(win.title, 22) : "Window") : monitor ? `Screen ${monitor.index + 1}${monitor.primary ? " (Primary)" : ""}` : "Screen";
   const devLabel = (d: MediaDeviceInfo, i: number, kind: string) => d.label || `${kind} ${i + 1}`;
   const pct = progress !== null && progress >= 0 ? Math.round(progress * 100) : null;
 
@@ -600,7 +632,7 @@ export default function Bar() {
                     icon={<ComputerDesktopIcon />}
                     title={`Screen ${m.index + 1}${m.primary ? " (Primary)" : ""}`}
                     note={`${m.width} × ${m.height}`}
-                    on={surface === "monitor" && monitorIdx === m.index}
+                    on={src === "monitor" && monitorIdx === m.index}
                     onPick={() => {
                       set({ surface: "monitor" });
                       setMonitorIdx(m.index);
@@ -609,6 +641,8 @@ export default function Bar() {
                   />
                 ))}
               </div>
+              {caps.windowCapture && (
+              <>
               <span className="cb-group">
                 Windows
                 <button className="cb-icon small" onClick={loadTargets} aria-label="Refresh the list" title="Refresh the list">
@@ -632,6 +666,12 @@ export default function Bar() {
                   />
                 ))}
               </div>
+              </>
+              )}
+              {caps.blocked && <p className="cb-note warn">{caps.blocked}</p>}
+              {!caps.blocked && !caps.hidesFromCapture && (
+                <p className="cb-note">{caps.os === "macos" ? "macOS may show this bar in screen recordings: move it to another screen, or minimize it while you record." : "This bar shows in screen recordings here: record a window, or move the bar to another screen."}</p>
+              )}
             </>
           )}
 
@@ -776,7 +816,7 @@ export default function Bar() {
         {phase === "idle" && (
           <>
             <button className={panel === "source" ? "cb-source on" : "cb-source"} onClick={() => toggle("source")} aria-haspopup="dialog" aria-expanded={panel === "source"} title="What to record">
-              {surface === "window" ? <WindowIcon aria-hidden /> : <ComputerDesktopIcon aria-hidden />}
+              {src === "window" ? <WindowIcon aria-hidden /> : <ComputerDesktopIcon aria-hidden />}
               <span>{sourceLabel}</span>
               <ChevronUpIcon className="cb-chev" aria-hidden />
             </button>
@@ -787,9 +827,11 @@ export default function Bar() {
             <button className={`cb-icon${cam ? " lit" : ""}${panel === "camera" ? " open" : ""}`} onClick={() => toggle("camera")} aria-label="Camera" aria-expanded={panel === "camera"} title={cam ? "Camera on" : "Camera off"}>
               {cam ? <VideoCameraIcon aria-hidden /> : <VideoCameraSlashIcon aria-hidden />}
             </button>
-            <button className={systemAudio ? "cb-icon lit" : "cb-icon"} onClick={() => set({ systemAudio: !systemAudio })} role="switch" aria-checked={systemAudio} aria-label="System sound" title={systemAudio ? "System sound on" : "System sound off"}>
-              {systemAudio ? <SpeakerWaveIcon aria-hidden /> : <SpeakerXMarkIcon aria-hidden />}
-            </button>
+            {caps.systemAudio && (
+              <button className={systemAudio ? "cb-icon lit" : "cb-icon"} onClick={() => set({ systemAudio: !systemAudio })} role="switch" aria-checked={systemAudio} aria-label="System sound" title={systemAudio ? "System sound on" : "System sound off"}>
+                {systemAudio ? <SpeakerWaveIcon aria-hidden /> : <SpeakerXMarkIcon aria-hidden />}
+              </button>
+            )}
             <button className={countdown ? "cb-icon lit" : "cb-icon"} onClick={() => set({ countdown: NEXT_COUNTDOWN[countdown] })} aria-label={`Countdown: ${countdown ? `${countdown} seconds` : "off"}`} title={countdown ? `Countdown ${countdown} s (click to change)` : "No countdown (click to change)"}>
               <ClockIcon aria-hidden />
               {countdown > 0 && <i className="cb-badge">{countdown}</i>}

@@ -1,7 +1,7 @@
 {
   "name": "reelif-capture",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "ReeliF Capture by SyntaxilitY - a screen recorder with smooth click zooms.",
   "license": "MIT",
   "type": "module",

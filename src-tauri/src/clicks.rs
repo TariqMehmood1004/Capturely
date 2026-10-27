@@ -1,12 +1,15 @@
 //! Click log for the screen recorder: while a recording runs, a thread polls the global pointer and
 //! notes every left-button press and, about 20 times a second, where the pointer is when it moved
 //! (milliseconds since the start, screen pixels). The recorder turns them into zooms that follow the
-//! pointer (core/recorder.ts, core/screenZoom.ts). Windows only for now; other systems return none.
+//! pointer (core/recorder.ts, core/screenZoom.ts). Windows (Win32), Linux (X11, sys/linux.rs) and
+//! macOS (CoreGraphics, sys/macos.rs); other systems log nothing.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use serde::Serialize;
+
+use crate::sys::MonitorScale;
 
 #[derive(Serialize, Clone, Copy)]
 pub struct Click {
@@ -28,30 +31,59 @@ const MAX_MOVES: usize = 200_000;
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 
-/// Pointer position and whether the left button is down.
+/// Pointer position (physical screen pixels) and whether the left button is down.
 #[cfg(windows)]
-fn pointer() -> Option<(i32, i32, bool)> {
-    use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
-    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-    let mut p = POINT { x: 0, y: 0 };
-    // SAFETY: plain Win32 queries writing into a local POINT.
-    unsafe {
-        if GetCursorPos(&mut p) == 0 {
-            return None;
+struct Pointer;
+
+#[cfg(windows)]
+impl Pointer {
+    fn new(_monitors: &[MonitorScale]) -> Option<Self> {
+        Some(Self)
+    }
+
+    fn read(&mut self) -> Option<(i32, i32, bool)> {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let mut p = POINT { x: 0, y: 0 };
+        // SAFETY: plain Win32 queries writing into a local POINT.
+        unsafe {
+            if GetCursorPos(&mut p) == 0 {
+                return None;
+            }
+            Some((p.x, p.y, (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0))
         }
-        Some((p.x, p.y, (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0))
     }
 }
 
-#[cfg(not(windows))]
-fn pointer() -> Option<(i32, i32, bool)> {
-    None
+#[cfg(target_os = "linux")]
+use crate::sys::linux::Pointer;
+#[cfg(target_os = "macos")]
+use crate::sys::macos::Pointer;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+struct Pointer;
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+impl Pointer {
+    fn new(_monitors: &[MonitorScale]) -> Option<Self> {
+        None
+    }
+
+    fn read(&mut self) -> Option<(i32, i32, bool)> {
+        None
+    }
 }
 
 /// Start logging clicks (a running log is replaced).
 #[tauri::command]
-pub fn click_log_start() {
+pub fn click_log_start(app: tauri::AppHandle) {
+    let monitors: Vec<MonitorScale> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|m| MonitorScale { x: m.position().x, y: m.position().y, width: m.size().width, height: m.size().height, scale: m.scale_factor() })
+        .collect();
     let stop = Arc::new(AtomicBool::new(false));
     let clicks = Arc::new(Mutex::new(Vec::new()));
     let moves = Arc::new(Mutex::new(Vec::new()));
@@ -59,11 +91,13 @@ pub fn click_log_start() {
         old.stop.store(true, Ordering::Relaxed);
     }
     std::thread::spawn(move || {
+        // Opened on this thread (an X display is used from the thread that opened it).
+        let Some(mut pointer) = Pointer::new(&monitors) else { return };
         let t0 = Instant::now();
         let mut was_down = true; // a press already held at the start is not a click
         let mut last: Option<Click> = None;
         while !stop.load(Ordering::Relaxed) {
-            if let Some((x, y, down)) = pointer() {
+            if let Some((x, y, down)) = pointer.read() {
                 let ms = t0.elapsed().as_secs_f64() * 1000.0;
                 let moved = last.map_or(true, |l| ms - l.ms >= MOVE_EVERY_MS && ((x - l.x).abs() >= MOVE_MIN_PX || (y - l.y).abs() >= MOVE_MIN_PX));
                 if moved {

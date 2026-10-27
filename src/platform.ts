@@ -12,6 +12,17 @@ export interface CaptureTargets {
   windows: Array<{ id: string; title: string }>;
 }
 
+/** What recording can do on this computer (Rust sys::PlatformInfo). */
+export interface PlatformInfo {
+  os: "windows" | "linux" | "macos";
+  systemAudio: boolean;
+  windowCapture: boolean;
+  /** The capture bar and the frame are left out of recordings. */
+  hidesFromCapture: boolean;
+  /** Why recording cannot start here, if so. */
+  blocked: string | null;
+}
+
 export interface CaptureSpec {
   kind: "monitor" | "window";
   monitor?: number;
@@ -101,6 +112,7 @@ export const platform = {
     close: () => getCurrentWindow().close(),
   },
 
+  info: () => invoke<PlatformInfo>("platform_info"),
   captureTargets: () => invoke<CaptureTargets>("capture_targets"),
   captureStart: (spec: CaptureSpec) => invoke<MonitorRect>("capture_start", { spec }),
   capturePause: (paused: boolean) => invoke<void>("capture_pause", { paused }),
@@ -159,6 +171,7 @@ export const platform = {
         }
       }),
     sendReady: () => void emit("overlay:ready"),
+    onReady: (cb: () => void) => listen("overlay:ready", () => cb()),
     /** Seconds left in the countdown; 0 = recording. */
     tick: (n: number) => void emit("overlay:tick", n),
     onTick: (cb: (n: number) => void) => listen<number>("overlay:tick", (e) => cb(e.payload)),

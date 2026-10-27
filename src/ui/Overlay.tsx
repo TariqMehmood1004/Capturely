@@ -45,9 +45,9 @@ export default function Overlay() {
     if (!frame || !live || !el || reducedMotion()) return;
     const edges = el.querySelectorAll<HTMLElement>(".ov-edge");
     const tl = gsap.timeline();
-    tl.fromTo(el, { "--w": "10px" }, { "--w": "4px", duration: 0.6, ease: "power3.out" }).fromTo(edges, { autoAlpha: 0.4 }, { autoAlpha: 1, duration: 0.18, repeat: 3, yoyo: true, ease: "none" }, 0);
+    tl.fromTo(el, { "--w": "10px" }, { "--w": "4px", duration: 0.6, ease: "power3.out" }).fromTo(edges, { autoAlpha: 0.35 }, { autoAlpha: 1, duration: 0.18, repeat: 4, yoyo: true, ease: "none" }, 0);
     tl.call(() => {
-      breathe.current = gsap.to(edges, { autoAlpha: 0.55, duration: 1.4, ease: "sine.inOut", repeat: -1, yoyo: true });
+      breathe.current = gsap.to(edges, { autoAlpha: 0.7, duration: 1.4, ease: "sine.inOut", repeat: -1, yoyo: true });
     });
     return () => {
       tl.kill();

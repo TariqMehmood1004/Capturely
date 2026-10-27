@@ -2979,11 +2979,12 @@ dependencies = [
 
 [[package]]
 name = "reelif-capture"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cpal",
  "fs4",
  "log",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",
@@ -2994,7 +2995,9 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "webkit2gtk",
  "windows-sys 0.59.0",
+ "x11-dl",
 ]
 
 [[package]]

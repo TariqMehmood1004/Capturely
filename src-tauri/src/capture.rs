@@ -1,9 +1,12 @@
-//! Native screen capture for the recorder (Windows): no system picker and no "sharing your screen"
-//! bar. A monitor is grabbed with FFmpeg's Desktop Duplication source (`ddagrab`, smooth at 60 fps,
-//! cursor optional), a single window with `gdigrab`. Each pause closes a video segment; system sound
-//! comes from WASAPI loopback (cpal) into a WAV file, padded with silence where Windows sends
-//! nothing. `capture_finish` joins the segments and mixes system sound and the microphone into one
-//! H.264/AAC MP4. Other systems report that native capture is not available.
+//! Native screen capture for the recorder: no system picker and no "sharing your screen" bar.
+//! - Windows: a monitor through FFmpeg's Desktop Duplication source (`ddagrab`, smooth at 60 fps,
+//!   cursor optional), a single window with `gdigrab`; system sound from WASAPI loopback (cpal) into
+//!   a WAV file, padded with silence where Windows sends nothing.
+//! - Linux (X11): `x11grab` of the screen's area (a window: its area); system sound from the
+//!   PulseAudio/PipeWire monitor of the default output, recorded into each segment.
+//! - macOS: `avfoundation` "Capture screen N"; no system sound (macOS offers none without a driver).
+//! Each pause closes a video segment. `capture_finish` joins the segments and mixes system sound and
+//! the microphone into one H.264/AAC MP4.
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Child, Stdio};
@@ -64,6 +67,14 @@ pub struct CaptureRect {
 
 struct Running {
     spec: CaptureSpec,
+    /// What is recorded, in screen pixels (Linux grabs this area).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    rect: CaptureRect,
+    /// FFmpeg's input device (macOS: the avfoundation screen number).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    device: Option<String>,
+    /// System sound is recorded inside each segment (Linux).
+    seg_audio: bool,
     dir: PathBuf,
     segments: Vec<PathBuf>,
     ffmpeg: Option<Child>,
@@ -98,10 +109,11 @@ pub fn capture_targets(app: AppHandle) -> AppResult<CaptureTargets> {
     Ok(CaptureTargets { monitors, windows: win::windows() })
 }
 
-fn ffmpeg_args(spec: &CaptureSpec, out: &std::path::Path) -> AppResult<Vec<String>> {
-    let fps = spec.fps.clamp(10, 60);
-    let even = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
-    let mut a: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into()];
+/// The screen (or window) as FFmpeg input arguments, for this system.
+#[cfg(windows)]
+fn video_input(run: &Running, fps: u32, even: &str) -> AppResult<Vec<String>> {
+    let spec = &run.spec;
+    let mut a: Vec<String> = Vec::new();
     match spec.kind.as_str() {
         "monitor" => {
             let idx = spec.monitor.unwrap_or(0);
@@ -111,9 +123,55 @@ fn ffmpeg_args(spec: &CaptureSpec, out: &std::path::Path) -> AppResult<Vec<Strin
         "window" => {
             let id: isize = spec.window.as_deref().unwrap_or("").parse().map_err(|_| AppError::Invalid("Choose a window to record.".into()))?;
             a.extend(["-f".into(), "gdigrab".into(), "-framerate".into(), fps.to_string(), "-draw_mouse".into(), u8::from(spec.cursor).to_string()]);
-            a.extend(["-i".into(), format!("hwnd=0x{id:x}"), "-vf".into(), even.into()]);
+            a.extend(["-i".into(), format!("hwnd=0x{id:x}")]);
         }
         _ => return Err(AppError::Invalid("Unknown capture source.".into())),
+    }
+    Ok(a)
+}
+
+/// X11: the area of the screen (a window's area for a window) from the app's display.
+#[cfg(target_os = "linux")]
+fn video_input(run: &Running, fps: u32, _even: &str) -> AppResult<Vec<String>> {
+    let r = run.rect;
+    let mut a: Vec<String> = vec!["-f".into(), "x11grab".into(), "-framerate".into(), fps.to_string(), "-draw_mouse".into(), u8::from(run.spec.cursor).to_string()];
+    a.extend(["-video_size".into(), format!("{}x{}", r.width, r.height), "-i".into(), format!("{}+{},{}", crate::sys::linux::display_name(), r.x, r.y)]);
+    Ok(a)
+}
+
+/// macOS: the avfoundation screen device, without its sound.
+#[cfg(target_os = "macos")]
+fn video_input(run: &Running, fps: u32, _even: &str) -> AppResult<Vec<String>> {
+    let dev = run.device.clone().ok_or_else(|| AppError::Invalid("That screen is not available for recording.".into()))?;
+    Ok(vec![
+        "-f".into(),
+        "avfoundation".into(),
+        "-capture_cursor".into(),
+        u8::from(run.spec.cursor).to_string(),
+        "-framerate".into(),
+        fps.to_string(),
+        "-i".into(),
+        format!("{dev}:none"),
+    ])
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn video_input(_run: &Running, _fps: u32, _even: &str) -> AppResult<Vec<String>> {
+    Err(AppError::Invalid("Screen recording is not available on this system.".into()))
+}
+
+fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
+    let fps = run.spec.fps.clamp(10, 60);
+    let even = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+    let mut a: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into()];
+    a.extend(video_input(run, fps, even)?);
+    // Linux: what the computer plays, from the default output's monitor (PulseAudio / PipeWire).
+    if run.seg_audio {
+        a.extend(["-thread_queue_size", "1024", "-f", "pulse", "-i", "@DEFAULT_MONITOR@", "-map", "0:v", "-map", "1:a", "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()));
+    }
+    // ddagrab sizes the picture itself; the other sources are evened here.
+    if !(cfg!(windows) && run.spec.kind == "monitor") {
+        a.extend(["-vf".into(), even.into()]);
     }
     a.extend(
         ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", "-r"]
@@ -129,7 +187,7 @@ fn ffmpeg_args(spec: &CaptureSpec, out: &std::path::Path) -> AppResult<Vec<Strin
 fn spawn_segment(run: &mut Running) -> AppResult<()> {
     let out = run.dir.join(format!("segment-{}.mkv", run.segments.len()));
     let mut cmd = std::process::Command::new(tools::ffmpeg()?);
-    cmd.args(ffmpeg_args(&run.spec, &out)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(ffmpeg_args(run, &out)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -194,8 +252,8 @@ fn end_segment(run: &mut Running) {
 /// Start recording; returns the recorded area in screen pixels (for click zooms).
 #[tauri::command]
 pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect> {
-    if !cfg!(windows) {
-        return Err(AppError::Invalid("Native screen capture is available on Windows only.".into()));
+    if let Some(why) = crate::sys::info().blocked {
+        return Err(AppError::Invalid(why));
     }
     cancel_now();
     let rect = match spec.kind.as_str() {
@@ -204,13 +262,27 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
             let m = ms.get(spec.monitor.unwrap_or(0) as usize).ok_or_else(|| AppError::Invalid("That screen is not connected.".into()))?;
             CaptureRect { x: m.position().x, y: m.position().y, width: m.size().width, height: m.size().height }
         }
+        _ if !crate::sys::info().window_capture => return Err(AppError::Invalid("Window recording is not available on this system yet. Record a screen instead.".into())),
         _ => win::window_rect(spec.window.as_deref().unwrap_or("")).ok_or_else(|| AppError::Invalid("That window is no longer open.".into()))?,
     };
+    #[cfg(target_os = "macos")]
+    let device = Some(crate::sys::macos::screen_device(&tools::ffmpeg()?, spec.monitor.unwrap_or(0)).ok_or_else(|| AppError::Invalid("macOS did not offer this screen for recording. Allow ReeliF Capture in System Settings > Privacy & Security > Screen Recording, then open it again.".into()))?);
+    #[cfg(not(target_os = "macos"))]
+    let device = None;
     let dir = crate::recordings::raw_dir(&app)?.join(format!("capture-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)?;
-    let mut run = Running { spec: spec.clone(), dir, segments: Vec::new(), ffmpeg: None, audio: None };
-    spawn_segment(&mut run)?;
-    if spec.system_audio {
+    let seg_audio = cfg!(target_os = "linux") && spec.system_audio;
+    let mut run = Running { spec: spec.clone(), rect, device, seg_audio, dir, segments: Vec::new(), ffmpeg: None, audio: None };
+    if let Err(e) = spawn_segment(&mut run) {
+        // No sound server (or no output to listen to): record the picture without system sound.
+        if !run.seg_audio {
+            return Err(e);
+        }
+        log::warn!("system sound unavailable, recording without it: {e}");
+        run.seg_audio = false;
+        spawn_segment(&mut run)?;
+    }
+    if spec.system_audio && cfg!(windows) {
         // Without a sound device the recording simply has no system sound.
         run.audio = audio::Loopback::start(run.dir.join("system.wav")).ok();
     }
@@ -258,12 +330,12 @@ fn cancel_now() {
 pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, mic: Option<String>, take: String, duration: f64) -> AppResult<String> {
     let take = crate::recordings::take_dir(&app, &take)?;
     tools::validate_job_id(&job_id)?;
-    let (dir, segments, wav) = {
+    let (dir, segments, wav, seg_audio) = {
         let mut guard = lock();
         let mut run = guard.take().ok_or_else(|| AppError::Invalid("Nothing is being recorded.".into()))?;
         end_segment(&mut run);
         let wav = run.audio.take().map(|a| a.stop()).filter(|p| std::fs::metadata(p).map(|m| m.len() > 1024).unwrap_or(false));
-        (run.dir, run.segments, wav)
+        (run.dir, run.segments, wav, run.seg_audio)
     };
     let segments: Vec<PathBuf> = segments.into_iter().filter(|s| std::fs::metadata(s).map(|m| m.len() > 0).unwrap_or(false)).collect();
     if segments.is_empty() {
@@ -282,14 +354,16 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
     let guard = JobGuard::new(&registry, &job_id);
     let mut cmd = new_command(&tools::ffmpeg()?);
     cmd.args(["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list);
-    let mut sounds = 0;
-    for p in [wav.as_ref(), mic.as_ref()].into_iter().flatten() {
+    // Sounds to mix: the segments' own (Linux system sound), the system WAV (Windows), the microphone.
+    let mut labels: Vec<String> = if seg_audio { vec!["[0:a]".into()] } else { Vec::new() };
+    for (i, p) in [wav.as_ref(), mic.as_ref()].into_iter().flatten().enumerate() {
         cmd.arg("-i").arg(p);
-        sounds += 1;
+        labels.push(format!("[{}:a]", i + 1));
     }
+    let sounds = labels.len();
     cmd.args(["-map", "0:v", "-c:v", "copy"]);
     if sounds > 0 {
-        let ins: String = (1..=sounds).map(|i| format!("[{i}:a]")).collect();
+        let ins: String = labels.concat();
         let mix = if sounds > 1 { format!("{ins}amix=inputs={sounds}:duration=longest:normalize=0,apad[a]") } else { format!("{ins}apad[a]") };
         cmd.args(["-filter_complex", &mix, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-shortest"]);
     }
@@ -367,7 +441,10 @@ mod win {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use crate::sys::linux as win;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod win {
     use super::{CaptureRect, CaptureWindow};
     pub fn windows() -> Vec<CaptureWindow> {
@@ -506,9 +583,10 @@ mod audio {
             }
         }
 
+        /// Linux records system sound inside the video segments; macOS has none.
         #[cfg(not(windows))]
         pub fn start(_path: PathBuf) -> Result<Self, String> {
-            Err("System sound capture is available on Windows only.".into())
+            Err("System sound is recorded with the picture here.".into())
         }
 
         pub fn set_paused(&self, on: bool) {

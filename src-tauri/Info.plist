@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>ReeliF Capture records your voice with the screen when you turn the microphone on.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>ReeliF Capture adds your camera as a bubble to the recording when you turn the camera on.</string>
+</dict>
+</plist>

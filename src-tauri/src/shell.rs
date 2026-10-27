@@ -32,12 +32,21 @@ fn exclude_from_capture(w: &WebviewWindow) -> bool {
         // SAFETY: a valid window handle of this process, a documented flag and a local out value.
         let ok = unsafe { SetWindowDisplayAffinity(hwnd.0 as _, WDA_EXCLUDEFROMCAPTURE) != 0 && GetWindowDisplayAffinity(hwnd.0 as _, &mut got) != 0 };
         if !ok || got != WDA_EXCLUDEFROMCAPTURE {
-            log::warn!("window {} could not be left out of screen captures", w.label());
+            log::warn!("window {} could not be left out of screen captures (affinity {got:#x})", w.label());
             return false;
         }
         true
     }
-    #[cfg(not(windows))]
+    // macOS: ask not to be shared, but newer capture paths may still record it, so not "true".
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(ns) = w.ns_window() {
+            crate::sys::macos::share_none(ns);
+        }
+        false
+    }
+    // X11 has no way to leave a window out of a screen grab.
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = w;
         false
@@ -115,11 +124,12 @@ pub async fn overlay_open(app: AppHandle, x: i32, y: i32, width: u32, height: u3
         .map_err(|e| AppError::Process(format!("Could not show the recording frame: {e}")))?;
     let _ = w.set_position(PhysicalPosition { x, y });
     let _ = w.set_size(PhysicalSize { width, height });
-    let _ = w.set_ignore_cursor_events(true);
+    // Order matters on Windows: the capture exclusion is refused once the window is layered, which
+    // click-through makes it; set first, it stays in force. Read back once shown: the frame is
+    // drawn only when Windows confirms the overlay is not recorded.
     exclude_from_capture(&w);
+    let _ = w.set_ignore_cursor_events(true);
     let _ = w.show();
-    // Checked again once shown (click-through changes the window's style): the frame is drawn
-    // only when Windows confirms the overlay is not recorded.
     Ok(exclude_from_capture(&w))
 }
 
