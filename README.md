@@ -4,7 +4,7 @@ Screen recorder with smooth click zooms, by **SyntaxilitY**.
 
 ## Install
 
-**Windows:** [`.exe/ReeliF Capture_0.1.0_x64-setup.exe`](.exe/ReeliF%20Capture_0.1.0_x64-setup.exe). Run it and
+**Windows:** [`apps\windows\ReeliF Capture_0.1.2_x64-setup.exe`](apps\windows\ReeliF Capture_0.1.2_x64-setup.exe). Run it and
 follow the steps.
 
 **Ubuntu** (22.04 or newer): install the `.deb` from the release; it installs FFmpeg too.
