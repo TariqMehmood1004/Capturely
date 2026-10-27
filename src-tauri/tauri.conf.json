@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ReeliF Capture",
+  "version": "0.1.0",
+  "identifier": "com.syntaxility.capture",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "ReeliF Capture",
+        "width": 1080,
+        "height": 760,
+        "minWidth": 900,
+        "minHeight": 640,
+        "decorations": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
+      "assetProtocol": { "enable": true, "scope": [] }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "SyntaxilitY",
+    "shortDescription": "ReeliF Capture by SyntaxilitY - screen recording with smooth click zooms",
+    "copyright": "Copyright (c) 2026 SyntaxilitY",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"]
+  }
+}

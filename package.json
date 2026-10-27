@@ -1,0 +1,33 @@
+{
+  "name": "reelif-capture",
+  "private": true,
+  "version": "0.1.0",
+  "description": "ReeliF Capture by SyntaxilitY - a screen recorder with smooth click zooms.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@heroicons/react": "2.2.0",
+    "@tauri-apps/api": "2.12.3",
+    "@tauri-apps/plugin-opener": "2.7.1",
+    "gsap": "3.15.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.2",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "6.0.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
+  }
+}
