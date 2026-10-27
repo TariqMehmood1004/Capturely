@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+# FFmpeg sidecars are large and GPL; copied in locally (see README).
+src-tauri/binaries/*.exe
+*.log
+# Local notes, kept off GitHub.
+/docs/
+/CLAUDE.md
+/.claude
+/screenshots

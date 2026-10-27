@@ -1,0 +1,94 @@
+# Builds the installers on each system: Windows (.exe, NSIS), Ubuntu (.deb, .AppImage) and
+# macOS (.dmg, one universal app for Intel and Apple Silicon).
+# - Push a tag like v0.1.1: the installers go into a draft GitHub release (review, then publish).
+# - Or run it by hand (Actions > Installers > Run workflow): the installers are attached to the run.
+name: Installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          # The oldest supported Ubuntu, so the packages run on newer ones too.
+          - os: ubuntu-22.04
+            args: ""
+          - os: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ startsWith(matrix.os, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Ubuntu build packages
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+
+      # The Windows installer carries FFmpeg (GPL build, not in the repository). Linux and macOS use
+      # the system's FFmpeg (the .deb depends on it; on macOS: brew install ffmpeg).
+      - name: FFmpeg for the Windows installer
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $dir = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          Invoke-WebRequest "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip" -OutFile $zip
+          Expand-Archive $zip $dir
+          $ffmpeg = Get-ChildItem $dir -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          Copy-Item $ffmpeg.FullName src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+          Copy-Item (Join-Path $ffmpeg.DirectoryName "ffprobe.exe") src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe
+
+      - run: npm ci
+
+      - name: Checks
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Build
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: "ReeliF Capture ${{ github.ref_name }}"
+          releaseBody: "Windows: the .exe. Ubuntu: the .deb (or the .AppImage). macOS: the .dmg (needs FFmpeg: brew install ffmpeg)."
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+      - name: Keep the installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/deb/*.deb
+            src-tauri/target/**/bundle/appimage/*.AppImage
+            src-tauri/target/**/bundle/dmg/*.dmg

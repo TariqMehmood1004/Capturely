@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ReeliF Capture",
+  "version": "0.1.2",
+  "identifier": "com.syntaxility.capture",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "ReeliF Capture",
+        "width": 620,
+        "height": 84,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost",
+      "assetProtocol": { "enable": true, "scope": [] }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "SyntaxilitY",
+    "shortDescription": "ReeliF Capture by SyntaxilitY - screen recording with smooth click zooms",
+    "copyright": "Copyright (c) 2026 SyntaxilitY",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "uninstallerHeaderImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp",
+        "startMenuFolder": "SyntaxilitY",
+        "languages": ["English", "Urdu"],
+        "customLanguageFiles": {
+          "English": "nsis/lang/English.nsh",
+          "Urdu": "nsis/lang/Urdu.nsh"
+        },
+        "displayLanguageSelector": true,
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
+  }
+}
