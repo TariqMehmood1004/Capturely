@@ -1,6 +1,8 @@
 // The export's FFmpeg filter graph: the recording (input 0) with smooth click zooms, click rings,
-// an optional background frame, and the camera (input 1) as a round bubble. Output label [vout].
+// an optional background frame, and the camera (input 1) as a round bubble. Output label [vout]
+// (yuv420p for MP4, or paletted for a GIF).
 // Built as one argument for -filter_complex_script (never a shell string). Pure.
+import { cutExpr, type Span } from "./edits";
 import { frameChains, type ScreenFrame } from "./frame";
 import type { BubbleSpot } from "./recorder";
 import { viewAt, viewExprs, zoomView, type ZoomKey } from "./zoom";
@@ -16,6 +18,13 @@ export interface ExportOptions {
   rings: ReadonlyArray<{ t: number; x: number; y: number }>;
   frame: ScreenFrame | null;
   camera: { spot: BubbleSpot; size: number } | null;
+  /** A GIF: the picture ends in a palette made from the whole clip (no audio). */
+  gif?: boolean;
+  /** Stretches left out (recording seconds) and the recording's length; with `audio` the sound
+   *  is trimmed the same way into [aout]. */
+  cuts?: readonly Span[];
+  duration?: number;
+  audio?: boolean;
 }
 
 /** How long a click ring shows, and its diameter (share of the picture's shorter side). */
@@ -80,6 +89,15 @@ export function buildExportGraph(o: ExportOptions): string {
     last = "[withcam]";
   }
 
-  chains.push(`${last}format=yuv420p[vout]`);
+  // Cuts last, so every effect above still runs on the recording's own clock.
+  const cut = o.cuts?.length && o.duration ? cutExpr(o.cuts, o.duration) : "";
+  if (cut) {
+    chains.push(`${last}select='not(${cut})',setpts=N/FRAME_RATE/TB[kept]`);
+    last = "[kept]";
+    if (o.audio && !o.gif) chains.push(`[0:a]aselect='not(${cut})',asetpts=N/SR/TB[aout]`);
+  }
+
+  if (o.gif) chains.push(`${last}split[gp][gu]`, `[gp]palettegen=stats_mode=diff[pal]`, `[gu][pal]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle[vout]`);
+  else chains.push(`${last}format=yuv420p[vout]`);
   return chains.join(";\n");
 }

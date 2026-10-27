@@ -14,11 +14,15 @@
       {
         "label": "main",
         "title": "ReeliF Capture",
-        "width": 1080,
-        "height": 760,
-        "minWidth": 900,
-        "minHeight": 640,
-        "decorations": false
+        "width": 620,
+        "height": 84,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "visible": false
       }
     ],
     "security": {

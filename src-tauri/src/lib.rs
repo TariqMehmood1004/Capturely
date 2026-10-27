@@ -5,6 +5,7 @@ mod clicks;
 mod error;
 mod jobs;
 mod recordings;
+mod shell;
 mod tools;
 
 use tauri::State;
@@ -20,6 +21,10 @@ pub fn run() {
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_opener::init())
         .manage(jobs::JobRegistry::default())
+        .setup(|app| {
+            shell::place_bar(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             cancel_job,
             capture::capture_targets,
@@ -27,8 +32,6 @@ pub fn run() {
             capture::capture_pause,
             capture::capture_cancel,
             capture::capture_finish,
-            capture::hud_open,
-            capture::hud_close,
             clicks::click_log_start,
             clicks::click_log_stop,
             recordings::take_create,
@@ -42,6 +45,15 @@ pub fn run() {
             recordings::raw_discard,
             recordings::camera_finish,
             recordings::free_space,
+            shell::bar_fit,
+            shell::bar_show,
+            shell::app_quit,
+            shell::overlay_open,
+            shell::overlay_move,
+            shell::overlay_close,
+            shell::editor_open,
+            shell::editor_take,
+            shell::editor_minimize,
         ])
         .run(tauri::generate_context!())
         .expect("error while running ReeliF Capture");

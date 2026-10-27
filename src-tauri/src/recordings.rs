@@ -97,6 +97,8 @@ pub struct TakeInfo {
     pub exports: Vec<String>,
     pub bytes: u64,
     pub modified: u64,
+    /// The recording has a sound track (checked for one take only: `take_get`).
+    pub audio: Option<bool>,
 }
 
 fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
@@ -104,7 +106,16 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
     let video = file("recording.mp4");
     let camera = file("camera.mp4");
     let mut exports: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map(|r| r.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("Export") && n.to_string_lossy().ends_with(".mp4"))).collect())
+        .map(|r| {
+            r.filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.file_name().is_some_and(|n| {
+                        let n = n.to_string_lossy();
+                        n.starts_with("Export") && !n.contains(".partial.") && (n.ends_with(".mp4") || n.ends_with(".gif"))
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default();
     exports.sort();
     for p in video.iter().chain(camera.iter()).chain(exports.iter()) {
@@ -121,6 +132,7 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
         exports: exports.iter().map(|p| p.display().to_string()).collect(),
         bytes,
         modified,
+        audio: None,
     }
 }
 
@@ -135,7 +147,12 @@ pub fn library_list(app: AppHandle) -> AppResult<Vec<TakeInfo>> {
 
 #[tauri::command]
 pub fn take_get(app: AppHandle, take: String) -> AppResult<TakeInfo> {
-    Ok(take_info(&app, &take_dir(&app, &take)?))
+    let mut info = take_info(&app, &take_dir(&app, &take)?);
+    if let (Some(video), Ok(probe)) = (&info.video, tools::ffprobe()) {
+        let out = std::process::Command::new(probe).args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0"]).arg(video).output();
+        info.audio = out.ok().filter(|o| o.status.success()).map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty());
+    }
+    Ok(info)
 }
 
 /// Delete a take folder (the user confirmed it in the app).
@@ -177,8 +194,13 @@ pub fn raw_discard(app: AppHandle, path: String) -> AppResult<()> {
 async fn render(app: &AppHandle, registry: &JobRegistry, job_id: &str, mut cmd: tokio::process::Command, out: &Path, duration: f64, what: &str) -> AppResult<()> {
     tools::validate_job_id(job_id)?;
     let guard = JobGuard::new(registry, job_id);
-    let partial = out.with_extension("partial.mp4");
-    cmd.args(["-movflags", "+faststart", "-progress", "pipe:1", "-nostats"]).arg(&partial);
+    // The partial file keeps the real extension (FFmpeg picks the container from it).
+    let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("mp4").to_string();
+    let partial = out.with_extension(format!("partial.{ext}"));
+    if ext == "mp4" {
+        cmd.args(["-movflags", "+faststart"]);
+    }
+    cmd.args(["-progress", "pipe:1", "-nostats"]).arg(&partial);
     let app2 = app.clone();
     let id = job_id.to_string();
     let res = run_process(cmd, &guard.token, None, |line| {
@@ -214,10 +236,24 @@ pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job
 }
 
 /// Export: FFmpeg reads the take's recording (input 0) and camera (input 1, when used) and runs the
-/// filter graph made by the app (core/exportGraph.ts: zooms, frame, bubble). Arguments are passed as
-/// an argv array; the graph is one argument. Returns the export's path in the take folder.
+/// filter graph made by the app (core/exportGraph.ts: zooms, frame, bubble; its size is the chosen
+/// quality). Arguments are passed as an argv array; the graph is one argument. `format` is "mp4"
+/// (H.264/AAC, `encoding` "fast" | "balanced" | "quality") or "gif" (the graph makes the palette).
+/// Returns the export's path in the take folder.
 #[tauri::command]
-pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, camera: bool, duration: f64, fps: u32) -> AppResult<String> {
+#[allow(clippy::too_many_arguments)]
+pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, camera: bool, duration: f64, fps: u32, format: String, encoding: String) -> AppResult<String> {
+    let gif = match format.as_str() {
+        "mp4" => false,
+        "gif" => true,
+        _ => return Err(AppError::Invalid("Unknown export format.".into())),
+    };
+    let (preset, crf) = match encoding.as_str() {
+        "fast" => ("veryfast", "23"),
+        "balanced" => ("medium", "20"),
+        "quality" => ("slow", "17"),
+        _ => return Err(AppError::Invalid("Unknown encoding.".into())),
+    };
     if graph.len() > 2_000_000 {
         return Err(AppError::Invalid("The export is too complex.".into()));
     }
@@ -227,12 +263,14 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
     if !video.is_file() || (camera && !cam.is_file()) {
         return Err(AppError::Invalid("The recording's files are missing.".into()));
     }
+    let ext = if gif { "gif" } else { "mp4" };
     let mut n = 1;
-    let mut out = dir.join("Export.mp4");
+    let mut out = dir.join(format!("Export.{ext}"));
     while out.exists() {
         n += 1;
-        out = dir.join(format!("Export {n}.mp4"));
+        out = dir.join(format!("Export {n}.{ext}"));
     }
+    let graph_has_audio = graph.contains("[aout]");
     let script = tools_tmp(&app, &job_id)?;
     std::fs::write(&script, graph)?;
     let mut cmd = new_command(&tools::ffmpeg()?);
@@ -241,9 +279,15 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
         cmd.arg("-i").arg(&cam);
     }
     cmd.arg("-filter_complex_script").arg(&script);
-    cmd.args(["-map", "[vout]", "-map", "0:a?", "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-r"]);
-    cmd.arg(fps.clamp(10, 60).to_string());
-    cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+    if gif {
+        cmd.args(["-map", "[vout]", "-an", "-loop", "0", "-r"]).arg(fps.clamp(5, 30).to_string());
+    } else {
+        // With cuts the graph trims the sound too ([aout]); otherwise the recording's sound as is.
+        let sound = if graph_has_audio { "[aout]" } else { "0:a?" };
+        cmd.args(["-map", "[vout]", "-map", sound, "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-r"]);
+        cmd.arg(fps.clamp(10, 60).to_string());
+        cmd.args(["-c:a", "aac", "-b:a", "192k"]);
+    }
     // The generated backgrounds and masks never end on their own: the recording's length ends the export.
     cmd.arg("-t").arg(format!("{:.3}", duration.max(0.1)));
     let res = render(&app, &registry, &job_id, cmd, &out, duration, "the export").await;

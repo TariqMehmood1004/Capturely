@@ -136,6 +136,8 @@ fn spawn_segment(run: &mut Running) -> AppResult<()> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().map_err(|e| AppError::Process(format!("Could not start the screen capture: {e}")))?;
+    #[cfg(windows)]
+    end_with_app(&child);
     // A source that cannot be opened (a closed window, a missing screen) ends at once.
     std::thread::sleep(Duration::from_millis(400));
     if let Ok(Some(status)) = child.try_wait() {
@@ -144,6 +146,30 @@ fn spawn_segment(run: &mut Running) -> AppResult<()> {
     run.segments.push(out);
     run.ffmpeg = Some(child);
     Ok(())
+}
+
+/// Put a process in a Windows job that is closed (and its processes ended) when the app exits.
+#[cfg(windows)]
+fn end_with_app(child: &Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    static JOB: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    // SAFETY: documented Win32 calls on a handle this process owns for its whole life; the limit
+    // structure is zeroed and sized as the API expects.
+    let job = *JOB.get_or_init(|| unsafe {
+        let h = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info as *const _ as *const _, std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32);
+        h as usize
+    });
+    // SAFETY: the child's handle is valid while `child` lives.
+    unsafe {
+        AssignProcessToJobObject(job as _, child.as_raw_handle() as _);
+    }
 }
 
 /// End the running segment: "q" lets FFmpeg finish the file; after 8 s it is killed.
@@ -167,11 +193,11 @@ fn end_segment(run: &mut Running) {
 
 /// Start recording; returns the recorded area in screen pixels (for click zooms).
 #[tauri::command]
-pub fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect> {
+pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect> {
     if !cfg!(windows) {
         return Err(AppError::Invalid("Native screen capture is available on Windows only.".into()));
     }
-    capture_cancel();
+    cancel_now();
     let rect = match spec.kind.as_str() {
         "monitor" => {
             let ms = app.available_monitors().unwrap_or_default();
@@ -194,7 +220,7 @@ pub fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect
 
 /// Pause (end the segment, stop writing sound) or resume (a new segment).
 #[tauri::command]
-pub fn capture_pause(paused: bool) -> AppResult<()> {
+pub async fn capture_pause(paused: bool) -> AppResult<()> {
     let mut guard = lock();
     let run = guard.as_mut().ok_or_else(|| AppError::Invalid("Nothing is being recorded.".into()))?;
     if let Some(a) = &run.audio {
@@ -212,7 +238,11 @@ pub fn capture_pause(paused: bool) -> AppResult<()> {
 
 /// Throw the take away (restart, cancel, closing the recorder).
 #[tauri::command]
-pub fn capture_cancel() {
+pub async fn capture_cancel() {
+    cancel_now();
+}
+
+fn cancel_now() {
     if let Some(mut run) = lock().take() {
         end_segment(&mut run);
         if let Some(a) = run.audio.take() {
@@ -503,52 +533,5 @@ mod audio {
             assert_eq!(u32::from_le_bytes([h[28], h[29], h[30], h[31]]), 48_000 * 2 * 4);
             assert_eq!(u32::from_le_bytes([h[40], h[41], h[42], h[43]]), 800);
         }
-    }
-}
-
-/// Label of the floating recording bar (its page renders `ui/RecorderHud.tsx`).
-pub const HUD: &str = "recorder-hud";
-
-/// Open the floating recording bar: a small frameless window, always on top, near the top of the
-/// main screen, left out of screen captures (Windows) so it never appears in the recording.
-#[tauri::command]
-pub fn hud_open(app: AppHandle) -> AppResult<()> {
-    if let Some(w) = app.get_webview_window(HUD) {
-        let _ = w.unminimize();
-        let _ = w.show();
-        return Ok(());
-    }
-    let w = tauri::WebviewWindowBuilder::new(&app, HUD, tauri::WebviewUrl::App("index.html".into()))
-        .title("ReeliF recorder")
-        .inner_size(460.0, 64.0)
-        .resizable(false)
-        .maximizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .always_on_top(true)
-        .focused(false)
-        .build()
-        .map_err(|e| AppError::Process(format!("Could not open the recording bar: {e}")))?;
-    if let Ok(Some(m)) = w.primary_monitor() {
-        let size = w.outer_size().unwrap_or(tauri::PhysicalSize { width: 460, height: 64 });
-        let x = m.position().x + (m.size().width as i32 - size.width as i32) / 2;
-        let _ = w.set_position(tauri::PhysicalPosition { x, y: m.position().y + (m.size().height as f64 * 0.03) as i32 });
-    }
-    #[cfg(windows)]
-    if let Ok(hwnd) = w.hwnd() {
-        // WDA_EXCLUDEFROMCAPTURE (Windows 10 2004+): screen grabs see through the bar.
-        // SAFETY: a valid window handle of this process and a documented flag.
-        unsafe {
-            windows_sys::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity(hwnd.0 as _, 0x11);
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn hud_close(app: AppHandle) {
-    if let Some(w) = app.get_webview_window(HUD) {
-        let _ = w.destroy();
     }
 }

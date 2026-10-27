@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 // Vite for Tauri: a fixed port of its own (ReeliF Studio uses 1420), Rust sources not watched.

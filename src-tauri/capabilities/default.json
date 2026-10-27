@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "ReeliF Capture windows: the recorder and its floating bar",
-  "windows": ["main", "recorder-hud"],
+  "description": "ReeliF Capture windows: the capture bar, the recording overlay and the editor",
+  "windows": ["main", "overlay", "editor"],
   "permissions": [
     "core:default",
     "core:event:default",
