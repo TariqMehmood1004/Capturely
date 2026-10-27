@@ -1,7 +1,9 @@
 //! Native screen capture for the recorder: no system picker and no "sharing your screen" bar.
 //! - Windows: a monitor through FFmpeg's Desktop Duplication source (`ddagrab`, smooth at 60 fps,
-//!   cursor optional), a single window with `gdigrab`; system sound from WASAPI loopback (cpal) into
-//!   a WAV file, padded with silence where Windows sends nothing.
+//!   cursor optional); a window through Windows Graphics Capture (`gfxcapture`): only that
+//!   window, also while other windows cover it, and also apps drawn by the GPU (Chromium,
+//!   Electron), which GDI grabs record white. System sound from WASAPI loopback (cpal) into a WAV
+//!   file, padded with silence where Windows sends nothing.
 //! - Linux (X11): `x11grab` of the screen's area (a window: its area); system sound from the
 //!   PulseAudio/PipeWire monitor of the default output, recorded into each segment.
 //! - macOS: `avfoundation` "Capture screen N"; no system sound (macOS offers none without a driver).
@@ -121,9 +123,14 @@ fn video_input(run: &Running, fps: u32, even: &str) -> AppResult<Vec<String>> {
             a.push(format!("ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={},hwdownload,format=bgra,{even}", u8::from(spec.cursor)));
         }
         "window" => {
-            let id: isize = spec.window.as_deref().unwrap_or("").parse().map_err(|_| AppError::Invalid("Choose a window to record.".into()))?;
-            a.extend(["-f".into(), "gdigrab".into(), "-framerate".into(), fps.to_string(), "-draw_mouse".into(), u8::from(spec.cursor).to_string()]);
-            a.extend(["-i".into(), format!("hwnd=0x{id:x}")]);
+            // That window only (also when covered), by its handle; a resized window keeps its
+            // first size, scaled to fit.
+            let hwnd: u64 = spec.window.as_deref().unwrap_or("").parse().map_err(|_| AppError::Invalid("Choose a window to record.".into()))?;
+            a.extend(["-f".into(), "lavfi".into(), "-i".into()]);
+            a.push(format!(
+                "gfxcapture=hwnd={hwnd}:max_framerate={fps}:capture_cursor={}:resize_mode=scale_aspect,hwdownload,format=bgra,{even}",
+                u8::from(spec.cursor)
+            ));
         }
         _ => return Err(AppError::Invalid("Unknown capture source.".into())),
     }
@@ -170,7 +177,7 @@ fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
         a.extend(["-thread_queue_size", "1024", "-f", "pulse", "-i", "@DEFAULT_MONITOR@", "-map", "0:v", "-map", "1:a", "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()));
     }
     // ddagrab sizes the picture itself; the other sources are evened here.
-    if !(cfg!(windows) && run.spec.kind == "monitor") {
+    if !cfg!(windows) {
         a.extend(["-vf".into(), even.into()]);
     }
     a.extend(
@@ -186,8 +193,14 @@ fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
 /// Start one video segment (stdin kept open: "q" ends it cleanly).
 fn spawn_segment(run: &mut Running) -> AppResult<()> {
     let out = run.dir.join(format!("segment-{}.mkv", run.segments.len()));
+    // FFmpeg's own messages go to a file beside the segment, for when the source fails.
+    let errors = out.with_extension("log");
     let mut cmd = std::process::Command::new(tools::ffmpeg()?);
-    cmd.args(ffmpeg_args(run, &out)?).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.args(ffmpeg_args(run, &out)?).stdin(Stdio::piped()).stdout(Stdio::null());
+    match std::fs::File::create(&errors) {
+        Ok(f) => cmd.stderr(f),
+        Err(_) => cmd.stderr(Stdio::null()),
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -199,7 +212,11 @@ fn spawn_segment(run: &mut Running) -> AppResult<()> {
     // A source that cannot be opened (a closed window, a missing screen) ends at once.
     std::thread::sleep(Duration::from_millis(400));
     if let Ok(Some(status)) = child.try_wait() {
-        return Err(AppError::Process(format!("The screen capture stopped at once ({status}). Choose another screen or window.")));
+        let why = std::fs::read_to_string(&errors).unwrap_or_default();
+        let why = why.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
+        log::warn!("screen capture ended at once ({status}): {why}");
+        let detail = if why.is_empty() { String::new() } else { format!(" FFmpeg: {}", why.chars().take(160).collect::<String>()) };
+        return Err(AppError::Process(format!("The screen capture stopped at once. Choose another screen or window.{detail}")));
     }
     run.segments.push(out);
     run.ffmpeg = Some(child);
@@ -252,6 +269,7 @@ fn end_segment(run: &mut Running) {
 /// Start recording; returns the recorded area in screen pixels (for click zooms).
 #[tauri::command]
 pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect> {
+    log::info!("capture start: {} (screen {:?}, window {:?}, {} fps)", spec.kind, spec.monitor, spec.window, spec.fps);
     if let Some(why) = crate::sys::info().blocked {
         return Err(AppError::Invalid(why));
     }
@@ -399,12 +417,25 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
 mod win {
     use super::{CaptureRect, CaptureWindow};
     use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
-    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindowVisible};
+    use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible};
 
     unsafe extern "system" fn each(hwnd: HWND, lparam: LPARAM) -> BOOL {
         // SAFETY: lparam is the &mut Vec passed by `windows()` for the duration of EnumWindows.
         let out = &mut *(lparam as *mut Vec<CaptureWindow>);
         if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
+            return 1;
+        }
+        // Not ReeliF Capture's own windows (they are left out of captures, so Windows refuses
+        // to record them), nor windows Windows keeps hidden ("cloaked": other desktops, apps
+        // suspended in the background).
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid == std::process::id() {
+            return 1;
+        }
+        let mut cloaked = 0u32;
+        if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED as u32, &mut cloaked as *mut u32 as *mut _, 4) == 0 && cloaked != 0 {
             return 1;
         }
         let len = GetWindowTextLengthW(hwnd);
@@ -430,11 +461,15 @@ mod win {
         out
     }
 
+    /// What the window shows on screen: DWM's frame bounds (without Windows 10's invisible resize
+    /// borders), or the window rectangle when DWM has none.
     pub fn window_rect(id: &str) -> Option<CaptureRect> {
+        use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
         let hwnd = id.parse::<isize>().ok()? as HWND;
         let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
-        // SAFETY: GetWindowRect writes into a local RECT; an invalid handle returns 0.
-        if unsafe { GetWindowRect(hwnd, &mut r) } == 0 {
+        // SAFETY: both calls write into a local RECT of the size passed; an invalid handle fails.
+        let dwm = unsafe { DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS as u32, &mut r as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32) } == 0;
+        if !dwm && unsafe { GetWindowRect(hwnd, &mut r) } == 0 {
             return None;
         }
         Some(CaptureRect { x: r.left, y: r.top, width: (r.right - r.left).max(0) as u32, height: (r.bottom - r.top).max(0) as u32 })

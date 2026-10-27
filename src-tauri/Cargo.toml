@@ -1,6 +1,6 @@
 [package]
 name = "reelif-capture"
-version = "0.1.1"
+version = "0.1.2"
 description = "ReeliF Capture by SyntaxilitY - a screen recorder with smooth click zooms"
 authors = ["SyntaxilitY"]
 license = "MIT"
@@ -28,7 +28,7 @@ fs4 = { version = "0.13", features = ["sync"] }
 uuid = { version = "1", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_JobObjects", "Win32_Security"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_JobObjects", "Win32_Security"] }
 # System sound (WASAPI loopback). Apache-2.0.
 cpal = "0.15"
 
