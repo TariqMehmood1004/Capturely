@@ -7,19 +7,9 @@ Screen recorder with smooth click zooms, by **SyntaxilitY**.
 **Windows:** [`apps\windows\ReeliF Capture_0.1.2_x64-setup.exe`](apps\windows\ReeliF Capture_0.1.2_x64-setup.exe). Run it and
 follow the steps.
 
-**Ubuntu** (22.04 or newer): install the `.deb` from the release; it installs FFmpeg too.
-
-```
-sudo apt install ./reelif-capture_0.1.0_amd64.deb
-```
-
-Recording needs an Xorg session: on the login screen choose "Ubuntu on Xorg" (gear button).
-
-**macOS** (11 or newer): open the `.dmg` and drag ReeliF Capture to Applications. Install FFmpeg
-first (`brew install ffmpeg`). The first recording asks for Screen Recording permission (System
-Settings > Privacy & Security); allow it and open the app again.
-
 Recordings are saved in your Videos folder, in `ReeliF Capture`.
+
+**Remaining platforms:** Mac and Ubuntu are coming soon.
 
 | | Windows | Ubuntu | macOS |
 |---|---|---|---|
