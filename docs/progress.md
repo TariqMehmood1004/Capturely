@@ -38,6 +38,10 @@
   paused); it is a click-through overlay window left out of the recording.
 - The editor window always opens on the library; the take just recorded is marked "New".
 - Gliding hover pill (Studio's menu bar) on button groups everywhere (`ui/glide.ts`).
+- Windows installer (NSIS, per machine), branded like ReeliF Studio's: Capture sidebar/header art
+  (`scripts/make-nsis-art.ps1`), English and Urdu with a language selector, Capture welcome and
+  finish texts, and a pre-install hook that stops a running copy (and its FFmpeg) before updating.
+  Build: `npm run tauri build` -> `src-tauri/target/release/bundle/nsis/`.
 - Theme switch in the title bar (as in ReeliF Studio): dark or light, revealed by a circle
   growing from the switch (View Transitions), the chosen icon turns in; remembered and applied
   in every window (`ui/theme.ts`, `ui/ThemeSwitch.tsx`). Until chosen, Windows decides.

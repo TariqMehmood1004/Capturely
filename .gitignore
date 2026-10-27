@@ -5,3 +5,4 @@ src-tauri/gen/
 # FFmpeg sidecars are large and GPL; copied in locally (see README).
 src-tauri/binaries/*.exe
 *.log
+/docs

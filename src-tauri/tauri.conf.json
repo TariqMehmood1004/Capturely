@@ -37,6 +37,24 @@
     "shortDescription": "ReeliF Capture by SyntaxilitY - screen recording with smooth click zooms",
     "copyright": "Copyright (c) 2026 SyntaxilitY",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"]
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico",
+        "headerImage": "icons/nsis-header.bmp",
+        "uninstallerHeaderImage": "icons/nsis-header.bmp",
+        "sidebarImage": "icons/nsis-sidebar.bmp",
+        "startMenuFolder": "SyntaxilitY",
+        "languages": ["English", "Urdu"],
+        "customLanguageFiles": {
+          "English": "nsis/lang/English.nsh",
+          "Urdu": "nsis/lang/Urdu.nsh"
+        },
+        "displayLanguageSelector": true,
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
   }
 }
