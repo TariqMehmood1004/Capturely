@@ -8,3 +8,5 @@ src-tauri/binaries/*.exe
 # Local notes, kept off GitHub.
 /docs/
 /CLAUDE.md
+/.claude
+/screenshots
