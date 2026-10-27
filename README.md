@@ -1,16 +1,20 @@
 # ReeliF Capture
 
-**ReeliF Capture** by SyntaxilitY — a screen recorder with smooth click zooms. A separate app from
-ReeliF Studio (the editor keeps its own recorder).
+Screen recorder with smooth click zooms, by **SyntaxilitY**.
 
-- Records a whole screen or one window natively on Windows: no system picker, no "sharing your
-  screen" bar. Smooth 30/60 fps (FFmpeg Desktop Duplication), cursor shown or hidden.
-- System sound (Windows loopback), microphone (optional), camera bubble (optional).
-- Floating recording bar: its own always-on-top window, left out of the recording.
-- Every click becomes a smooth zoom that glides between clicks and follows the mouse (or zooms out
-  when it moves away); click rings; markers; teleprompter; countdown; stop after a set time.
-- Library in `Videos\ReeliF Capture`; export with zooms, click rings, a background frame (padding,
-  rounded corners, shadow) and the camera bubble, checked with ffprobe after rendering.
+## Install
+
+Windows installer: [`.exe/ReeliF Capture_0.1.0_x64-setup.exe`](.exe/ReeliF%20Capture_0.1.0_x64-setup.exe)
+
+Run it and follow the steps. Recordings are saved in `Videos\ReeliF Capture`.
+
+## Features
+
+- Floating capture bar: screen or window, microphone, camera, system sound, countdown.
+- Smooth zooms on every click, click rings, cursor, background frame, camera bubble.
+- Editor: split and cut, per-zoom depth, undo/redo, markers.
+- Export MP4 or GIF with quality, encoding and frame rate choices; saved presets.
+- Dark and light themes.
 
 ## Develop
 
@@ -19,12 +23,13 @@ npm install
 npm run tauri dev
 ```
 
-FFmpeg/FFprobe sidecars go in `src-tauri/binaries/` as `ffmpeg-x86_64-pc-windows-msvc.exe` and
-`ffprobe-x86_64-pc-windows-msvc.exe` (GPL build, not committed; copy them from ReeliF Studio's
-`src-tauri/binaries`).
+FFmpeg and FFprobe go in `src-tauri/binaries/` as `ffmpeg-x86_64-pc-windows-msvc.exe` and
+`ffprobe-x86_64-pc-windows-msvc.exe` (not committed).
 
-Checks: `npm run typecheck`, `npm test`, `cargo test` (in `src-tauri`).
+## Build the installer
 
-## Platforms
+```
+npm run tauri build
+```
 
-Windows first. Native capture, system sound and the click log are Windows-only for now.
+Output: `src-tauri/target/release/bundle/nsis/`.
