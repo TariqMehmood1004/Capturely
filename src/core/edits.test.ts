@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addSplit, cutExpr, editedZooms, editZoom, EMPTY_EDIT, keptDuration, keptSpans, pieces, playFrom, togglePiece, validEdit } from "./edits";
+import { addSpeeds, addSplit, cutExpr, editedZooms, editZoom, EMPTY_EDIT, keptDuration, keptSpans, pieces, playFrom, removeSpeeds, togglePiece, validEdit } from "./edits";
 
 describe("cuts", () => {
   it("splits into pieces and ignores splits too close to an edge", () => {
@@ -51,6 +51,19 @@ describe("zoom edits", () => {
   });
 
   it("repairs stored edits", () => {
-    expect(validEdit({ splits: [2, -1, "x"], cuts: [{ a: 1, b: 2 }, { a: 1 }], zooms: [{ at: 2, zoom: 9 }, {}] })).toEqual({ splits: [2], cuts: [{ a: 1, b: 2 }], zooms: [{ at: 2, zoom: 3 }] });
+    expect(validEdit({ splits: [2, -1, "x"], cuts: [{ a: 1, b: 2 }, { a: 1 }], zooms: [{ at: 2, zoom: 9 }, {}] })).toEqual({ ...EMPTY_EDIT, splits: [2], cuts: [{ a: 1, b: 2 }], zooms: [{ at: 2, zoom: 3 }] });
+  });
+
+  it("repairs speed-ups, sound and cursor, keeping good values", () => {
+    const e = validEdit({ speeds: [{ a: 4, b: 2, rate: 4 }, { a: 1, b: 3, rate: 4 }, { a: 5, b: 6, rate: 99 }], sound: { system: 5, mic: 0.4, clean: true }, cursor: { on: false, size: 9 } });
+    expect(e.speeds).toEqual([{ a: 1, b: 3, rate: 4 }]);
+    expect(e.sound).toEqual({ system: 2, mic: 0.4, clean: true });
+    expect(e.cursor).toEqual({ on: false, size: 3, smooth: 0.5 });
+  });
+
+  it("speeds stretches up, replacing what they overlap", () => {
+    const e = addSpeeds(addSpeeds(EMPTY_EDIT, [{ a: 1, b: 3 }], 2), [{ a: 2, b: 5 }, { a: 8, b: 9 }], 4);
+    expect(e.speeds).toEqual([{ a: 2, b: 5, rate: 4 }, { a: 8, b: 9, rate: 4 }]);
+    expect(removeSpeeds(e, [{ a: 8.5, b: 8.6 }]).speeds).toEqual([{ a: 2, b: 5, rate: 4 }]);
   });
 });

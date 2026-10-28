@@ -18,6 +18,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
+# Start, stop, pause and marker keys from any app. MIT/Apache-2.0.
+tauri-plugin-global-shortcut = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,6 +33,9 @@ uuid = { version = "1", features = ["v4"] }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_JobObjects", "Win32_Security"] }
 # System sound (WASAPI loopback). Apache-2.0.
 cpal = "0.15"
+# Windows' built-in text recognition (blurring remembered words) and screen copies for it. Same
+# version as Tauri's. MIT/Apache-2.0.
+windows = { version = "0.62", features = ["Foundation", "Foundation_Collections", "Graphics_Imaging", "Media_Ocr", "Storage_Streams", "Win32_Graphics_Gdi"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Window list and pointer through Xlib, loaded at run time (as Tauri's windowing does). MIT.

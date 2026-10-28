@@ -16,8 +16,10 @@ const data = (duration: number): TakeData => ({
   height: 1080,
   fps: 30,
   source: "monitor",
+  cursor: "smooth",
   clicks: clicks.filter((c) => c.t < duration),
-  path: [],
+  // A pointer path that wanders (the smooth cursor draws it).
+  path: Array.from({ length: 40 }, (_, i) => ({ t: i * 0.05 + (i > 20 ? 0.8 : 0), x: 0.3 + 0.3 * Math.sin(i / 6), y: 0.4 + 0.2 * Math.cos(i / 5) })).filter((p) => p.t < duration),
   markers: [5, 18].filter((m) => m < duration),
   zoom: { on: true, depth: 1.8, hold: 1.5, after: "follow" },
   ripples: true,
@@ -39,10 +41,11 @@ const takes: TakeInfo[] = [
   bytes: (mb as number) * 1e6,
   modified: Date.now() - i * 86_400_000,
   audio: true,
+  sounds: [],
 }));
 
 const replies: Record<string, (args: Record<string, unknown>) => unknown> = {
-  platform_info: () => ({ os: "windows", systemAudio: true, windowCapture: true, hidesFromCapture: true, blocked: null }),
+  platform_info: () => ({ os: "windows", systemAudio: true, windowCapture: true, hidesFromCapture: true, blocked: null, font: "C:/Windows/Fonts/segoeuib.ttf" }),
   capture_targets: () => ({
     monitors: [
       { index: 0, name: "Screen 1", x: 0, y: 0, width: 1920, height: 1080, primary: true },
@@ -55,8 +58,14 @@ const replies: Record<string, (args: Record<string, unknown>) => unknown> = {
     ],
   }),
   capture_encoders: () => ["intel"],
+  hotkeys: () => [
+    { action: "record", keys: "Alt+Shift+R", ready: true },
+    { action: "pause", keys: "Alt+Shift+P", ready: true },
+    { action: "marker", keys: "Alt+Shift+M", ready: true },
+  ],
   free_space: () => 120e9,
   library_list: () => takes,
+  take_quiet: () => ({ freezes: [[2.1, 3.1]], silences: null }),
   take_get: (a) => takes.find((t) => t.path === a.take || t.name === a.take) ?? takes[0],
   editor_take: () => params.get("take"),
   "plugin:window|is_maximized": () => true,

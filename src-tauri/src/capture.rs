@@ -49,9 +49,12 @@ pub struct CaptureTargets {
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureSpec {
-    /// "monitor" or "window".
+    /// "monitor", "window", or "area" (part of `monitor`).
     pub kind: String,
     pub monitor: Option<u32>,
+    /// For "area": the part of the screen, in physical pixels from the screen's corner.
+    #[serde(default)]
+    pub area: Option<CaptureRect>,
     pub window: Option<String>,
     pub fps: u32,
     pub cursor: bool,
@@ -116,7 +119,7 @@ pub struct CaptureResult {
 }
 
 /// What was recorded, in screen pixels (clicks are mapped onto it).
-#[derive(Serialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct CaptureRect {
     pub x: i32,
     pub y: i32,
@@ -192,6 +195,21 @@ fn video_input(run: &Running, fps: u32, even: &str) -> AppResult<Vec<String>> {
             a.extend(["-f".into(), "lavfi".into(), "-i".into()]);
             a.push(format!("ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={}{to_encoder}", u8::from(spec.cursor)));
         }
+        "area" => {
+            // Desktop Duplication cuts the area out on the graphics card (offsets from the
+            // screen's corner; capture_start made the size even and kept it on the screen).
+            let idx = spec.monitor.unwrap_or(0);
+            let r = spec.area.ok_or_else(|| AppError::Invalid("Choose the area to record.".into()))?;
+            a.extend(["-f".into(), "lavfi".into(), "-i".into()]);
+            a.push(format!(
+                "ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={}:offset_x={}:offset_y={}:video_size={}x{}{to_encoder}",
+                u8::from(spec.cursor),
+                r.x,
+                r.y,
+                r.width,
+                r.height
+            ));
+        }
         "window" => {
             // That window only (also when covered), by its handle; a resized window keeps its
             // first size, scaled to fit; the size is rounded down to even numbers.
@@ -266,9 +284,14 @@ fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
     if run.seg_audio {
         a.extend(["-thread_queue_size", "1024", "-f", "pulse", "-i", "@DEFAULT_MONITOR@", "-map", "0:v", "-map", "1:a", "-c:a", "pcm_s16le"].iter().map(|s| s.to_string()));
     }
-    // ddagrab sizes the picture itself; the other sources are evened here.
+    // ddagrab sizes the picture itself; the other sources are evened here. macOS records the
+    // whole screen, so an area is cut out of it (X11 grabs the area itself).
     if !cfg!(windows) {
-        a.extend(["-vf".into(), even.into()]);
+        let crop = match (cfg!(target_os = "macos"), run.spec.kind.as_str(), run.spec.area) {
+            (true, "area", Some(r)) => format!("crop={}:{}:{}:{},", r.width, r.height, r.x, r.y),
+            _ => String::new(),
+        };
+        a.extend(["-vf".into(), format!("{crop}{even}")]);
     }
     a.extend(encoder_args(&run.spec.encoder, &run.spec.quality));
     a.push("-r".into());
@@ -370,6 +393,18 @@ fn end_segment(run: &mut Running) {
     }
 }
 
+/// An area kept on its screen (`sw`×`sh`) with an even size (H.264 needs it), at least 64 px.
+fn fit_area(a: CaptureRect, sw: u32, sh: u32) -> AppResult<CaptureRect> {
+    let x = a.x.clamp(0, sw as i32 - 1);
+    let y = a.y.clamp(0, sh as i32 - 1);
+    let width = a.width.min(sw - x as u32) / 2 * 2;
+    let height = a.height.min(sh - y as u32) / 2 * 2;
+    if width < 64 || height < 64 {
+        return Err(AppError::Invalid("The area is too small to record. Drag out a bigger one.".into()));
+    }
+    Ok(CaptureRect { x, y, width, height })
+}
+
 /// Start recording; returns the recorded area in screen pixels (for click zooms).
 #[tauri::command]
 pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureStarted> {
@@ -387,6 +422,13 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
             let ms = app.available_monitors().unwrap_or_default();
             let m = ms.get(spec.monitor.unwrap_or(0) as usize).ok_or_else(|| AppError::Invalid("That screen is not connected.".into()))?;
             CaptureRect { x: m.position().x, y: m.position().y, width: m.size().width, height: m.size().height }
+        }
+        "area" => {
+            let ms = app.available_monitors().unwrap_or_default();
+            let m = ms.get(spec.monitor.unwrap_or(0) as usize).ok_or_else(|| AppError::Invalid("That screen is not connected.".into()))?;
+            let a = fit_area(spec.area.ok_or_else(|| AppError::Invalid("Choose the area to record.".into()))?, m.size().width, m.size().height)?;
+            spec.area = Some(a);
+            CaptureRect { x: m.position().x + a.x, y: m.position().y + a.y, width: a.width, height: a.height }
         }
         _ if !crate::sys::info().window_capture => return Err(AppError::Invalid("Window recording is not available on this system yet. Record a screen instead.".into())),
         _ => win::window_rect(spec.window.as_deref().unwrap_or("")).ok_or_else(|| AppError::Invalid("That window is no longer open.".into()))?,
@@ -464,6 +506,24 @@ fn cancel_now() {
         }
         let _ = std::fs::remove_dir_all(&run.dir);
     }
+}
+
+/// One sound of the recording as AAC (`skip`: seconds before the picture started).
+async fn sound_track(src: &std::path::Path, skip: f64, length: f64, out: &std::path::Path) -> AppResult<()> {
+    let partial = out.with_extension("partial.m4a");
+    let mut cmd = new_command(&tools::ffmpeg()?);
+    cmd.args(["-hide_banner", "-nostdin", "-v", "error", "-y"]);
+    if skip > 0.005 && skip < 10.0 {
+        cmd.arg("-ss").arg(format!("{skip:.3}"));
+    }
+    cmd.arg("-i").arg(src).args(["-vn", "-t", &format!("{length:.3}"), "-c:a", "aac", "-b:a", "160k"]).arg(&partial);
+    let o = cmd.output().await?;
+    if !o.status.success() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(AppError::Process(summarize_stderr(&String::from_utf8_lossy(&o.stderr))));
+    }
+    std::fs::rename(&partial, out)?;
+    Ok(())
 }
 
 /// The length of a media file in seconds, from FFprobe.
@@ -585,6 +645,19 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
         Ok(o) => Err(AppError::Process(format!("Could not make the recording: {}", summarize_stderr(&o.stderr_tail)))),
         Err(e) => Err(e),
     };
+    // Each sound also on its own (system.m4a, mic.m4a), so the editor can set their volumes and
+    // clean up the microphone. Linux records system sound inside the picture, so there the
+    // recording's own sound is all there is.
+    if done.is_ok() && !seg_audio {
+        let length = probe_duration(&out).await.unwrap_or(duration);
+        for (name, src, skip) in [("system", wav.as_ref(), wav_skip), ("mic", mic.as_ref(), mic_skip)] {
+            if let Some(src) = src {
+                if let Err(e) = sound_track(src, skip, length, &take.join(format!("{name}.m4a"))).await {
+                    log::warn!("{name} sound track: {e}");
+                }
+            }
+        }
+    }
     let _ = std::fs::remove_file(&partial);
     let _ = std::fs::remove_dir_all(&dir);
     if let Some(m) = mic {
@@ -832,5 +905,17 @@ mod audio {
             assert_eq!(u32::from_le_bytes([h[28], h[29], h[30], h[31]]), 48_000 * 2 * 4);
             assert_eq!(u32::from_le_bytes([h[40], h[41], h[42], h[43]]), 800);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fit_area, CaptureRect};
+
+    #[test]
+    fn area_stays_on_screen_and_even() {
+        let a = fit_area(CaptureRect { x: 1800, y: -20, width: 301, height: 455 }, 1920, 1080).unwrap();
+        assert_eq!((a.x, a.y, a.width, a.height), (1800, 0, 120, 454));
+        assert!(fit_area(CaptureRect { x: 0, y: 0, width: 40, height: 400 }, 1920, 1080).is_err());
     }
 }

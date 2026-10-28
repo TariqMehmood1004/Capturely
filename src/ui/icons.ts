@@ -33,5 +33,11 @@ export {
   SunIcon,
   ArrowUturnRightIcon,
   ChevronDownIcon,
+  ViewfinderCircleIcon,
+  EyeSlashIcon,
+  ChatBubbleBottomCenterTextIcon,
+  BoltIcon,
+  PlusIcon,
+  AdjustmentsHorizontalIcon,
 } from "@heroicons/react/24/outline";
 export { BackwardIcon, ForwardIcon, PauseIcon, PlayIcon, StopIcon } from "@heroicons/react/20/solid";

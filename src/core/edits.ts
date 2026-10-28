@@ -1,5 +1,8 @@
-// Edits on a take, in the recording's own seconds: split points, removed stretches (cuts), and
-// per-zoom changes (depth, or off). Kept in take.json (`edit`). Pure.
+// Edits on a take, in the recording's own seconds: split points, removed stretches (cuts),
+// per-zoom changes (depth, or off), sped-up stretches, blur and text marks, and the sound and
+// smooth cursor settings. Kept in take.json (`edit`), all undoable. Pure.
+import { DEFAULT_CURSOR, type CursorLook } from "./cursor";
+import { validMarks, type Mark } from "./marks";
 import type { ZoomRegion } from "./zoom";
 
 export interface Span {
@@ -15,13 +18,31 @@ export interface ZoomEdit {
   off?: boolean;
 }
 
+/** A stretch played faster (quiet parts), in recording seconds. */
+export interface SpeedSpan extends Span {
+  rate: number;
+}
+
+/** Volumes (1 = as recorded, up to 2) and the microphone's noise cleanup. Without separate sound
+ *  tracks, `system` is the recording's own sound. */
+export interface SoundLook {
+  system: number;
+  mic: number;
+  clean: boolean;
+}
+export const DEFAULT_SOUND: SoundLook = { system: 1, mic: 1, clean: false };
+
 export interface TakeEdit {
   splits: number[];
   cuts: Span[];
   zooms: ZoomEdit[];
+  speeds: SpeedSpan[];
+  marks: Mark[];
+  sound: SoundLook;
+  cursor: CursorLook;
 }
 
-export const EMPTY_EDIT: TakeEdit = { splits: [], cuts: [], zooms: [] };
+export const EMPTY_EDIT: TakeEdit = { splits: [], cuts: [], zooms: [], speeds: [], marks: [], sound: DEFAULT_SOUND, cursor: DEFAULT_CURSOR };
 /** Shorter pieces than this are not made by a split. */
 export const MIN_PIECE = 0.1;
 
@@ -118,5 +139,37 @@ export function validEdit(v: unknown): TakeEdit {
         .filter((z): z is ZoomEdit => typeof z === "object" && z !== null && typeof (z as ZoomEdit).at === "number")
         .map((z) => ({ at: z.at, ...(typeof z.zoom === "number" ? { zoom: Math.min(3, Math.max(1.1, z.zoom)) } : {}), ...(z.off ? { off: true } : {}) }))
     : [];
-  return { splits: nums(o.splits), cuts: spans.map((c) => ({ a: c.a, b: c.b })), zooms };
+  const sound = (typeof o.sound === "object" && o.sound !== null ? o.sound : {}) as Record<string, unknown>;
+  const cursor = (typeof o.cursor === "object" && o.cursor !== null ? o.cursor : {}) as Record<string, unknown>;
+  const vol = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.min(2, Math.max(0, v)) : 1);
+  return {
+    splits: nums(o.splits),
+    cuts: spans.map((c) => ({ a: c.a, b: c.b })),
+    zooms,
+    speeds: validSpeeds(o.speeds),
+    marks: validMarks(o.marks),
+    sound: { system: vol(sound.system), mic: vol(sound.mic), clean: sound.clean === true },
+    cursor: {
+      on: cursor.on !== false,
+      size: typeof cursor.size === "number" && Number.isFinite(cursor.size) ? Math.min(3, Math.max(0.6, cursor.size)) : DEFAULT_CURSOR.size,
+      smooth: typeof cursor.smooth === "number" && Number.isFinite(cursor.smooth) ? Math.min(1, Math.max(0, cursor.smooth)) : DEFAULT_CURSOR.smooth,
+    },
+  };
 }
+
+export function validSpeeds(v: unknown): SpeedSpan[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((s): s is SpeedSpan => typeof s === "object" && s !== null && [s.a, s.b, s.rate].every((n) => typeof n === "number" && Number.isFinite(n)))
+    .filter((s) => s.b > s.a && s.a >= 0 && s.rate > 1 && s.rate <= 16)
+    .map((s) => ({ a: round(s.a), b: round(s.b), rate: s.rate }));
+}
+
+/** Speed stretches up (replacing speed-ups they overlap). */
+export function addSpeeds(edit: TakeEdit, spans: readonly Span[], rate: number): TakeEdit {
+  const rest = edit.speeds.filter((s) => !spans.some((x) => x.a < s.b && x.b > s.a));
+  return { ...edit, speeds: [...rest, ...spans.map((x) => ({ a: round(x.a), b: round(x.b), rate }))].sort((p, q) => p.a - q.a) };
+}
+
+/** Back to normal speed where the stretches are. */
+export const removeSpeeds = (edit: TakeEdit, spans: readonly Span[]): TakeEdit => ({ ...edit, speeds: edit.speeds.filter((s) => !spans.some((x) => x.a < s.b && x.b > s.a)) });

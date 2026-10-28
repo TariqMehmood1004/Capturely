@@ -3046,3 +3046,223 @@ h3,
     scale: none;
   }
 }
+
+/* Shortcut keys in the bar's Recording settings (hotkeys.rs). */
+.cb-keys {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+  color: var(--muted);
+}
+.cb-keys span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cb-keys span.off {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.cb-keys kbd {
+  min-width: 92px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  font: 600 11px var(--mono);
+  text-align: center;
+}
+
+/* Area picker (ui/Picker.tsx): the screen dims; the box drawn stays clear with an accent edge,
+   its size in a tag; the buttons sit under it. */
+.pk {
+  position: fixed;
+  inset: 0;
+  background: rgb(8 10 16 / 0.42);
+  cursor: crosshair;
+  touch-action: none;
+}
+.pk.has-box {
+  background: transparent;
+}
+.pk-box {
+  position: absolute;
+  /* The dim around the box is its own shadow, so the inside stays clear. */
+  box-shadow: 0 0 0 9999px rgb(8 10 16 / 0.42), inset 0 0 0 2px var(--accent);
+  pointer-events: none;
+}
+.pk-size {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 600 11px var(--mono);
+}
+.pk-hint {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--lift);
+  translate: -50% 0;
+  pointer-events: none;
+}
+.pk-hint.small {
+  padding: 8px 14px;
+  font-size: 12px;
+}
+.pk-hint svg {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+.pk-hint span {
+  display: grid;
+}
+.pk-hint em {
+  font-size: 12px;
+  font-style: normal;
+  color: var(--muted);
+}
+.pk-tools {
+  position: absolute;
+  display: flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 999px;
+  background: var(--surface);
+  box-shadow: var(--lift);
+  translate: -50% 0;
+  cursor: default;
+}
+.pk-tools .btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Smooth cursor, blur and text on the preview (core/cursor.ts, core/marks.ts). The cursor image's
+   tip is 18 px into a 114 × 162 image. */
+.take-cursor {
+  position: absolute;
+  width: auto;
+  translate: -15.79% -11.11%;
+  pointer-events: none;
+  user-select: none;
+}
+.take-blur {
+  position: absolute;
+  border-radius: 4px;
+  backdrop-filter: blur(14px);
+  background: rgb(127 127 127 / 0.08);
+  cursor: move;
+  touch-action: none;
+}
+.take-blur.sel,
+.take-text.sel {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.take-blur.off,
+.take-text.off {
+  opacity: 0.45;
+}
+.take-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: nwse-resize;
+}
+.take-text {
+  position: absolute;
+  z-index: 3;
+  max-width: 90%;
+  overflow: hidden;
+  background: rgb(12 14 19 / 0.78);
+  color: #fff;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: move;
+  touch-action: none;
+}
+
+/* Sped-up stretches on the timeline: an accent tint over the clip with the speed. */
+.ed-speedmask {
+  position: absolute;
+  top: 28px;
+  bottom: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+.ed-speedmask b {
+  margin-top: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+}
+
+/* Quiet parts and marks in the side panel. */
+.ed-quiet {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 2px;
+}
+.ed-quiet .ed-row em,
+.ed-mark .ed-row em {
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  color: var(--muted);
+}
+.ed-icon.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ed-mark {
+  gap: 10px;
+  padding: 6px;
+}
+.ed-mark.on {
+  background: var(--accent-soft);
+}
+.ed-mark-times {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ed-mark-times .btn {
+  flex: 1;
+  height: 30px;
+  font-size: 12px;
+}
+.ed-note.warn {
+  position: static;
+  translate: none;
+  white-space: normal;
+  border-radius: var(--radius-sm);
+  color: var(--marker);
+}

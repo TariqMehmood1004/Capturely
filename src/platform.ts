@@ -21,11 +21,23 @@ export interface PlatformInfo {
   hidesFromCapture: boolean;
   /** Why recording cannot start here, if so. */
   blocked: string | null;
+  /** A bold font file for text labels in exports, if one is found. */
+  font?: string | null;
+}
+
+/** Part of a screen in physical pixels from the screen's corner (area recording). */
+export interface AreaRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface CaptureSpec {
-  kind: "monitor" | "window";
+  kind: "monitor" | "window" | "area";
   monitor?: number;
+  /** For "area": the part of `monitor` to record. */
+  area?: AreaRect;
   window?: string;
   fps: number;
   cursor: boolean;
@@ -35,6 +47,13 @@ export interface CaptureSpec {
   quality: Quality;
   /** Keep FFmpeg's messages as capture.log in the take. */
   keepLog: boolean;
+}
+
+/** A key that works from any app (hotkeys.rs); `ready` is false when another app owns it. */
+export interface Hotkey {
+  action: "record" | "pause" | "marker";
+  keys: string;
+  ready: boolean;
 }
 
 export type Encoder = "cpu" | "nvidia" | "intel" | "amd";
@@ -57,6 +76,8 @@ export interface TakeInfo {
   modified: number;
   /** The recording has sound (known when opened with takeGet). */
   audio?: boolean | null;
+  /** Sounds kept on their own beside the recording (system.m4a, mic.m4a). */
+  sounds?: Array<"system" | "mic">;
 }
 
 /** take.json: what the recorder knew (times are seconds of the recording). */
@@ -67,7 +88,9 @@ export interface TakeData {
   width: number;
   height: number;
   fps: number;
-  source: "monitor" | "window";
+  source: "monitor" | "window" | "area";
+  /** "smooth": recorded without the cursor; the editor draws it from `path`. */
+  cursor?: "smooth";
   clicks: Array<{ t: number; x: number; y: number }>;
   path: Array<{ t: number; x: number; y: number }>;
   markers: number[];
@@ -77,6 +100,9 @@ export interface TakeData {
   /** The editor's cuts and per-zoom changes (absent until edited). */
   edit?: TakeEdit;
 }
+
+/** What an export reads besides the recording: the camera, the smooth cursor image, the separate sounds. */
+export type ExportInput = "camera" | "cursor" | "system" | "mic";
 
 /** A screen area in physical pixels (what the countdown covers). */
 export interface ScreenArea {
@@ -127,6 +153,9 @@ export const platform = {
   },
 
   info: () => invoke<PlatformInfo>("platform_info"),
+  hotkeys: () => invoke<Hotkey[]>("hotkeys"),
+  /** A shortcut key was pressed (in any app). */
+  onHotkey: (cb: (action: Hotkey["action"]) => void) => listen<Hotkey["action"]>("hotkey", (e) => cb(e.payload)),
   captureTargets: () => invoke<CaptureTargets>("capture_targets"),
   captureStart: (spec: CaptureSpec) => invoke<CaptureStarted>("capture_start", { spec }),
   /** Graphics card encoders that work on this computer (empty: the CPU only). */
@@ -149,8 +178,11 @@ export const platform = {
   takeSave: (take: string, data: TakeData) => invoke<void>("take_save", { take, json: JSON.stringify(data) }),
   takeGet: (take: string) => invoke<TakeInfo>("take_get", { take }),
   takeDelete: (take: string) => invoke<void>("take_delete", { take }),
-  takeExport: (take: string, graph: string, camera: boolean, duration: number, fps: number, format: "mp4" | "gif", encoding: "fast" | "balanced" | "quality") =>
-    job((jobId) => invoke<string>("take_export", { jobId, take, graph, camera, duration, fps, format, encoding })),
+  /** `inputs`: the graph's inputs after the recording, in order (core/exportGraph.ts numbers them). */
+  takeExport: (take: string, graph: string, inputs: ExportInput[], duration: number, fps: number, format: "mp4" | "gif", encoding: "fast" | "balanced" | "quality") =>
+    job((jobId) => invoke<string>("take_export", { jobId, take, graph, inputs, duration, fps, format, encoding })),
+  /** Still picture and silence at least `min` seconds long (core/quiet.ts keeps their overlap). */
+  takeQuiet: (take: string, duration: number, min: number) => job((jobId) => invoke<{ freezes: Array<[number, number]>; silences: Array<[number, number]> | null }>("take_quiet", { jobId, take, duration, min })),
   library: () => invoke<TakeInfo[]>("library_list"),
 
   /** The floating capture bar (window "main"). */
@@ -168,6 +200,24 @@ export const platform = {
   theme: {
     send: (t: "dark" | "light") => void emit("theme:changed", t),
     onChange: (cb: (t: "dark" | "light") => void) => listen<"dark" | "light">("theme:changed", (e) => cb(e.payload)),
+  },
+
+  /** The area picker over one screen (window "picker", ui/Picker.tsx). */
+  picker: {
+    /** Opens it over `screen` (physical pixels); resolves with the area dragged out, or null. */
+    pick: async (screen: ScreenArea): Promise<AreaRect | null> => {
+      let answer: (area: AreaRect | null) => void = () => undefined;
+      const done = new Promise<AreaRect | null>((resolve) => (answer = resolve));
+      const off = await listen<AreaRect | null>("picker:done", (e) => answer(e.payload));
+      try {
+        await invoke<void>("picker_open", { ...screen });
+        return await done;
+      } finally {
+        off();
+      }
+    },
+    done: (area: AreaRect | null) => void emit("picker:done", area),
+    close: () => invoke<void>("picker_close"),
   },
 
   /** The click-through overlay over what is recorded: the frame, and the countdown before. */
