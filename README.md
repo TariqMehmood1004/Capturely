@@ -4,7 +4,7 @@ Screen recorder with smooth click zooms, by **SyntaxilitY**.
 
 ## Install
 
-**Windows:** [`apps\windows\ReeliF Capture_0.1.2_x64-setup.exe`](apps\windows\ReeliF Capture_0.1.2_x64-setup.exe). Run it and
+**Windows:** [`apps/windows/ReeliF Capture_0.1.3_x64-setup.exe`](apps/windows/ReeliF%20Capture_0.1.3_x64-setup.exe). Run it and
 follow the steps.
 
 Recordings are saved in your Videos folder, in `ReeliF Capture`.

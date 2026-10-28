@@ -1,8 +1,8 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect } from "../core/recorder";
+import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect, type ScreenClick } from "../core/recorder";
 import type { AfterClick } from "../core/zoom";
-import { errorMessage, platform, type CaptureTargets, type PlatformInfo, type ScreenArea, type TakeData } from "../platform";
+import { errorMessage, platform, type AreaRect, type CaptureTargets, type Encoder, type Hotkey, type PlatformInfo, type Quality, type ScreenArea, type TakeData } from "../platform";
 import {
   ArrowPathIcon,
   CheckIcon,
@@ -10,6 +10,7 @@ import {
   ClockIcon,
   ComputerDesktopIcon,
   EllipsisVerticalIcon,
+  ViewfinderCircleIcon,
   FlagIcon,
   FolderOpenIcon,
   MicrophoneIcon,
@@ -33,7 +34,9 @@ type Panel = "source" | "mic" | "camera" | "more" | null;
 
 /** Choices remembered on this computer (defaults when storage is unavailable). */
 interface Prefs {
-  surface: "monitor" | "window";
+  surface: "monitor" | "window" | "area";
+  /** The last area dragged out (physical pixels from its screen's corner). */
+  area: (AreaRect & { monitor: number }) | null;
   systemAudio: boolean;
   mic: string;
   cam: string;
@@ -44,8 +47,14 @@ interface Prefs {
   zoomHold: number;
   after: AfterClick;
   ripples: boolean;
-  cursor: boolean;
+  /** The cursor: recorded as it is, drawn smoothly by the editor, or left out. */
+  cursorMode: "real" | "smooth" | "hidden";
   fps: 30 | 60;
+  /** Who encodes the picture: the processor (x264) or a graphics card. */
+  encoder: Encoder;
+  quality: Quality;
+  /** FFmpeg's messages kept as capture.log in the take. */
+  keepLog: boolean;
   countdown: 0 | 3 | 5;
   limit: 0 | 1 | 5 | 10 | 30;
   noise: boolean;
@@ -53,13 +62,22 @@ interface Prefs {
   speed: number;
 }
 const PREFS_KEY = "reelifcapture.prefs";
-const DEFAULT_PREFS: Prefs = { surface: "monitor", systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursor: true, fps: 60, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1 };
+const DEFAULT_PREFS: Prefs = { surface: "monitor", area: null, systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursorMode: "smooth", fps: 30, encoder: "cpu", quality: "high", keepLog: true, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1 };
 const BUBBLE_SIZE = { small: 0.17, medium: 0.22, large: 0.3 } as const;
 const NEXT_COUNTDOWN = { 0: 3, 3: 5, 5: 0 } as const;
 const MIN_FREE = 1.5e9;
+const ENCODER_LABEL: Record<Encoder, string> = { cpu: "CPU", nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
+const QUALITY_NOTE: Record<Quality, string> = { standard: "Smaller files", high: "Sharp text, moderate files", best: "Sharpest, largest files" };
 function loadPrefs(): Prefs {
   try {
-    return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>) };
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
+    // Choices saved before the encoder setting had 60 fps as the default; 30 is the default now.
+    if (saved.encoder === undefined) delete saved.fps;
+    // Before the smooth cursor there was only "Show cursor".
+    const old = saved as Partial<Prefs> & { cursor?: boolean };
+    if (old.cursorMode === undefined && old.cursor === false) old.cursorMode = "hidden";
+    delete old.cursor;
+    return { ...DEFAULT_PREFS, ...saved };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -128,7 +146,12 @@ interface Run {
   sinks: Array<{ kind: "mic" | "camera"; path: string; sink: Sink }>;
   take: string;
   rect: MonitorRect | null;
+  /** When the picture started (performance.now()); recording time counts from here. */
   t0: number;
+  /** When the microphone and camera recorders started (before the picture). */
+  sinkAt: number;
+  /** When the click log started. */
+  clickAt: number;
   pausedAt: number | null;
   pausedTotal: number;
   pauses: Array<{ a: number; b: number }>;
@@ -146,7 +169,7 @@ const STEP_LABEL: Record<Step, string> = { save: "Saving the recording", video: 
 export default function Bar() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const set = (c: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...c }));
-  const { surface, systemAudio, mic, cam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursor, fps, countdown, limit, noise, scriptOn, speed } = prefs;
+  const { surface, area, systemAudio, mic, cam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursorMode, fps, encoder, quality, keepLog, countdown, limit, noise, scriptOn, speed } = prefs;
   const [phase, setPhase] = useState<Phase>("idle");
   const [panel, setPanel] = useState<Panel>(null);
   const [moreTab, setMoreTab] = useState<"recording" | "effects" | "script">("recording");
@@ -161,8 +184,30 @@ export default function Bar() {
       .then(setCaps)
       .catch(() => undefined);
   }, []);
+  // Keys that work from any app (start/stop, pause, marker), as registered at start.
+  const [keys, setKeys] = useState<Hotkey[]>([]);
+  useEffect(() => {
+    void platform
+      .hotkeys()
+      .then(setKeys)
+      .catch(() => undefined);
+  }, []);
+  const keyOf = (a: Hotkey["action"]) => {
+    const k = keys.find((x) => x.action === a && x.ready);
+    return k ? ` (${k.keys})` : "";
+  };
+  // Graphics card encoders that work here (checked once, in the background).
+  const [gpus, setGpus] = useState<Encoder[]>([]);
+  useEffect(() => {
+    void platform
+      .captureEncoders()
+      .then(setGpus)
+      .catch(() => undefined);
+  }, []);
+  /** Clicks and the pointer path are logged for zooms, rings and the smooth cursor. */
+  const logPointer = clickZoom || ripples || cursorMode === "smooth";
   /** What is recorded: a saved window choice falls back to the screen where windows cannot be. */
-  const src = caps.windowCapture ? surface : "monitor";
+  const src = surface === "window" && !caps.windowCapture ? "monitor" : surface === "area" && !area ? "monitor" : surface;
   const [monitorIdx, setMonitorIdx] = useState(0);
   const [windowId, setWindowId] = useState("");
   const [script, setScript] = useState("");
@@ -417,6 +462,10 @@ export default function Bar() {
   /** The screen the overlay covers first: the chosen display, or the main one for a window. */
   const countdownArea = (): ScreenArea | null => {
     const list = targets?.monitors ?? [];
+    if (src === "area" && area) {
+      const m = list.find((x) => x.index === area.monitor);
+      if (m) return { x: m.x + area.x, y: m.y + area.y, width: area.width, height: area.height };
+    }
     const m = (src === "monitor" ? list.find((x) => x.index === monitorIdx) : undefined) ?? list.find((x) => x.primary) ?? list[0];
     return m ? { x: m.x, y: m.y, width: m.width, height: m.height } : null;
   };
@@ -449,10 +498,16 @@ export default function Bar() {
     setElapsed(0);
     setMarkers(0);
     setOverLimit(false);
+    r.sinkAt = now();
     r.sinks.forEach((x) => x.sink.rec.start(1000));
-    r.rect = await platform.captureStart({ kind: src, monitor: monitorIdx, window: windowId, fps, cursor, systemAudio: caps.systemAudio && systemAudio });
-    if (src === "window" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
-    if (clickZoom || ripples) await platform.clickLogStart().catch(() => undefined);
+    const onArea = src === "area" && prefs.area ? prefs.area : null;
+    const started = await platform.captureStart({ kind: src, monitor: onArea ? onArea.monitor : monitorIdx, ...(onArea ? { area: { x: onArea.x, y: onArea.y, width: onArea.width, height: onArea.height } } : {}), window: windowId, fps, cursor: cursorMode === "real", systemAudio: caps.systemAudio && systemAudio, encoder, quality, keepLog });
+    r.rect = started.rect;
+    // The clock starts with the picture (FFmpeg started `lead` seconds ago), not before it.
+    r.t0 = now() - started.lead * 1000;
+    if (src !== "monitor" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
+    r.clickAt = now();
+    if (logPointer) await platform.clickLogStart().catch(() => undefined);
     setPhase("recording");
   };
 
@@ -471,7 +526,7 @@ export default function Bar() {
     if (src === "window" && !windowId) return setError("Choose the window to record.");
     const free = await platform.freeSpace().catch(() => Number.POSITIVE_INFINITY);
     if (free < MIN_FREE) return setError(`Only ${(free / 1e9).toFixed(1)} GB is free in your Videos folder. Free at least 1.5 GB and try again.`);
-    const r: Run = { streams: [], micStream: null, camStream: null, sinks: [], take: "", rect: null, t0: 0, pausedAt: null, pausedTotal: 0, pauses: [], markers: [] };
+    const r: Run = { streams: [], micStream: null, camStream: null, sinks: [], take: "", rect: null, t0: 0, sinkAt: 0, clickAt: 0, pausedAt: null, pausedTotal: 0, pauses: [], markers: [] };
     run.current = r;
     void platform.editor.minimize().catch(() => undefined);
     try {
@@ -543,19 +598,25 @@ export default function Bar() {
     void platform.overlay.close().catch(() => undefined);
     void platform.bar.show().catch(() => undefined);
     try {
-      const log = clickZoom || ripples ? await platform.clickLogStop().catch(() => null) : null;
+      const log = logPointer ? await platform.clickLogStop().catch(() => null) : null;
+      // Click times count from the click log's start; recording time from the picture's.
+      const shift = (pts: ScreenClick[]) => pts.map((c) => ({ ...c, ms: c.ms + (r.clickAt - r.t0) }));
       await Promise.all(r.sinks.map((x) => x.sink.finish()));
       stopAll();
       const micRaw = r.sinks.find((x) => x.kind === "mic")?.path ?? null;
       const camRaw = r.sinks.find((x) => x.kind === "camera")?.path ?? null;
       setStep("video");
-      const job = platform.captureFinish(micRaw, r.take, length);
+      // The microphone and camera started before the picture; that part is left out.
+      const skip = Math.max(0, (r.t0 - r.sinkAt) / 1000);
+      const job = platform.captureFinish(micRaw, skip, r.take, length);
       const off = await job.onProgress((p) => setProgress(p));
-      await job.promise.finally(off);
+      const made = await job.promise.finally(off);
+      // The take is as long as its video (the clock can run a little longer than the picture).
+      const duration = made.duration ?? length;
       if (camRaw) {
         setStep("camera");
         setProgress(null);
-        const cj = platform.cameraFinish(camRaw, r.take, length);
+        const cj = platform.cameraFinish(camRaw, skip, r.take, duration);
         const off2 = await cj.onProgress((p) => setProgress(p));
         await cj.promise.finally(off2);
       }
@@ -565,13 +626,14 @@ export default function Bar() {
       const data: TakeData = {
         version: 1,
         createdAt: new Date().toISOString(),
-        duration: length,
+        duration,
         width: area.width,
         height: area.height,
         fps,
         source: src,
-        clicks: log ? onRecording(log.clicks, area, r.pauses) : [],
-        path: log ? onRecording(log.moves, area, r.pauses) : [],
+        ...(cursorMode === "smooth" && log ? { cursor: "smooth" as const } : {}),
+        clicks: log ? onRecording(shift(log.clicks), area, r.pauses).filter((c) => c.t <= duration) : [],
+        path: log ? onRecording(shift(log.moves), area, r.pauses).filter((c) => c.t <= duration) : [],
         markers: r.markers,
         zoom: { on: clickZoom, depth: zoomDepth, hold: zoomHold, after },
         ripples,
@@ -589,10 +651,42 @@ export default function Bar() {
     }
   };
 
+  // Shortcut keys: start or stop (also cancels a countdown), pause or resume, add a marker.
+  const onKey = useRef<(a: Hotkey["action"]) => void>(() => undefined);
+  onKey.current = (a) => {
+    if (a === "record") {
+      if (phase === "idle") void start();
+      else if (phase === "countdown") cancelled.current = true;
+      else if (phase === "recording") void stop();
+    } else if (phase === "recording") {
+      if (a === "pause") togglePause();
+      else if (a === "marker" && !paused) addMarker();
+    }
+  };
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    void platform.onHotkey((a) => onKey.current(a)).then((u) => (off = u));
+    return () => off?.();
+  }, []);
+
   useEffect(() => {
     if (overLimit && phase === "recording") void stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overLimit, phase]);
+
+  /** Drag out an area on the chosen screen (the main one when a window was chosen). */
+  const pickArea = async () => {
+    const list = targets?.monitors ?? [];
+    const m = list.find((x) => x.index === (area?.monitor ?? monitorIdx)) ?? list.find((x) => x.primary) ?? list[0];
+    if (!m) return;
+    setPanel(null);
+    try {
+      const got = await platform.picker.pick({ x: m.x, y: m.y, width: m.width, height: m.height });
+      if (got) set({ surface: "area", area: { ...got, monitor: m.index } });
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  };
 
   const toggle = (p: Exclude<Panel, null>) => {
     setError(null);
@@ -604,7 +698,7 @@ export default function Bar() {
   const monitor = targets?.monitors.find((m) => m.index === monitorIdx);
   const win = targets?.windows.find((w) => w.id === windowId);
   const short = (t: string, n: number) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
-  const sourceLabel = src === "window" ? (win ? short(win.title, 22) : "Window") : monitor ? `Screen ${monitor.index + 1}${monitor.primary ? " (Primary)" : ""}` : "Screen";
+  const sourceLabel = src === "area" && area ? `Area ${area.width} × ${area.height}` : src === "window" ? (win ? short(win.title, 22) : "Window") : monitor ? `Screen ${monitor.index + 1}${monitor.primary ? " (Primary)" : ""}` : "Screen";
   const devLabel = (d: MediaDeviceInfo, i: number, kind: string) => d.label || `${kind} ${i + 1}`;
   const pct = progress !== null && progress >= 0 ? Math.round(progress * 100) : null;
 
@@ -640,6 +734,23 @@ export default function Bar() {
                     }}
                   />
                 ))}
+              </div>
+              <span className="cb-group">Area</span>
+              <div role="radiogroup" aria-label="Area to record" className="cb-list glide">
+                <span className="glide-pill" aria-hidden />
+                {area && (
+                  <Choice
+                    icon={<ViewfinderCircleIcon />}
+                    title={`Area ${area.width} × ${area.height}`}
+                    note={`On screen ${area.monitor + 1}`}
+                    on={src === "area"}
+                    onPick={() => {
+                      set({ surface: "area" });
+                      setPanel(null);
+                    }}
+                  />
+                )}
+                <Choice icon={<ViewfinderCircleIcon />} title={area ? "Choose a new area" : "Choose an area"} note="Drag a box on the screen" on={false} onPick={() => void pickArea()} />
               </div>
               {caps.windowCapture && (
               <>
@@ -736,14 +847,34 @@ export default function Bar() {
               <div className="cb-more-body" key={moreTab}>
                 {moreTab === "recording" && (
                   <div className="cb-box">
-                    <Setting title="Frame rate" note="60 fps for smooth motion">
+                    <Setting title="Frame rate" note={fps === 60 ? "Smoother, needs a faster computer" : "Lighter, smooth for most screens"}>
                       <Segmented label="Frame rate" value={fps} onChange={(v) => set({ fps: v })} options={[{ value: 30, label: "30" }, { value: 60, label: "60" }]} />
+                    </Setting>
+                    {caps.os === "windows" && (
+                      <Setting title="Encoder" note={encoder === "cpu" ? (gpus.length ? "Processor; works everywhere" : "Processor; no graphics card encoder found") : "Graphics card; less work for the processor"}>
+                        <Segmented label="Encoder" value={gpus.includes(encoder) ? encoder : "cpu"} onChange={(v) => set({ encoder: v })} options={(["cpu", ...gpus] as Encoder[]).map((e) => ({ value: e, label: ENCODER_LABEL[e] }))} />
+                      </Setting>
+                    )}
+                    <Setting title="Quality" note={QUALITY_NOTE[quality]}>
+                      <Segmented label="Quality" value={quality} onChange={(v) => set({ quality: v })} options={[{ value: "standard", label: "Standard" }, { value: "high", label: "High" }, { value: "best", label: "Best" }]} />
+                    </Setting>
+                    <Setting title="Keep FFmpeg log" note={keepLog ? "Saved as capture.log in the take" : "Not kept"}>
+                      <Switch on={keepLog} label="Keep FFmpeg log" onChange={(v) => set({ keepLog: v })} />
                     </Setting>
                     <Setting title="Stop after" note={limit ? `Stops by itself at ${limit}:00` : "Records until you stop"}>
                       <Segmented label="Stop after" value={limit} onChange={(v) => set({ limit: v })} options={[{ value: 0, label: "Off" }, { value: 1, label: "1m" }, { value: 5, label: "5m" }, { value: 10, label: "10m" }, { value: 30, label: "30m" }]} />
                     </Setting>
-                    <Setting title="Show cursor" note={cursor ? "Shown in the recording" : "Hidden in the recording"}>
-                      <Switch on={cursor} label="Show cursor" onChange={(v) => set({ cursor: v })} />
+                    {keys.length > 0 && (
+                      <div className="cb-keys" aria-label="Shortcut keys, from any app">
+                        {keys.map((k) => (
+                          <span key={k.action} className={k.ready ? "" : "off"} title={k.ready ? "Works from any app" : "Another app already uses these keys"}>
+                            <kbd>{k.keys}</kbd> {k.action === "record" ? "Start / stop" : k.action === "pause" ? "Pause" : "Marker"}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <Setting title="Cursor" note={cursorMode === "smooth" ? "Drawn smooth and larger in the editor" : cursorMode === "real" ? "Recorded as it is" : "Left out of the recording"}>
+                      <Segmented label="Cursor" value={cursorMode} onChange={(v) => set({ cursorMode: v })} options={[{ value: "smooth", label: "Smooth" }, { value: "real", label: "Real" }, { value: "hidden", label: "Off" }]} />
                     </Setting>
                   </div>
                 )}
@@ -836,7 +967,7 @@ export default function Bar() {
               <ClockIcon aria-hidden />
               {countdown > 0 && <i className="cb-badge">{countdown}</i>}
             </button>
-            <button className="cb-rec" onClick={() => void start()} aria-label="Start recording" title="Start recording">
+            <button className="cb-rec" onClick={() => void start()} aria-label="Start recording" title={`Start recording${keyOf("record")}`}>
               <span aria-hidden />
             </button>
             <button className={panel === "more" ? "cb-icon open" : "cb-icon"} onClick={() => toggle("more")} aria-label="More settings" aria-expanded={panel === "more"} title="More settings">
@@ -880,16 +1011,16 @@ export default function Bar() {
                 {markers ? ` · ${markers} marker${markers === 1 ? "" : "s"}` : ""}
               </em>
             </span>
-            <button className="cb-icon" onClick={addMarker} aria-label="Add a marker" title="Add a marker here">
+            <button className="cb-icon" onClick={addMarker} aria-label="Add a marker" title={`Add a marker here${keyOf("marker")}`}>
               <FlagIcon aria-hidden />
             </button>
             <button className="cb-icon" onClick={() => void restart()} aria-label="Restart" title="Throw this take away and record again">
               <ArrowPathIcon aria-hidden />
             </button>
-            <button className="cb-icon" onClick={togglePause} aria-label={paused ? "Resume" : "Pause"} title={paused ? "Resume" : "Pause"}>
+            <button className="cb-icon" onClick={togglePause} aria-label={paused ? "Resume" : "Pause"} title={`${paused ? "Resume" : "Pause"}${keyOf("pause")}`}>
               {paused ? <PlayIcon aria-hidden /> : <PauseIcon aria-hidden />}
             </button>
-            <button className="cb-stop" onClick={() => void stop()}>
+            <button className="cb-stop" onClick={() => void stop()} title={`Stop and open the editor${keyOf("record")}`}>
               <StopIcon aria-hidden /> Stop
             </button>
             <span className="cb-sep" aria-hidden />

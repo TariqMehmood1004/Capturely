@@ -2,6 +2,7 @@
 //! left out of screen captures; it also records). `overlay` is a click-through window over what
 //! is being recorded: a frame around it while recording and the countdown before. `editor` is
 //! the full window for the library and finished takes; it opens maximized after a recording.
+//! `picker` covers one screen while an area to record is dragged out.
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
@@ -11,6 +12,7 @@ use crate::error::{AppError, AppResult};
 pub const BAR: &str = "main";
 pub const OVERLAY: &str = "overlay";
 pub const EDITOR: &str = "editor";
+pub const PICKER: &str = "picker";
 
 /// The take the editor shows when it opens (read once by `editor_take`).
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
@@ -131,6 +133,40 @@ pub async fn overlay_open(app: AppHandle, x: i32, y: i32, width: u32, height: u3
     let _ = w.set_ignore_cursor_events(true);
     let _ = w.show();
     Ok(exclude_from_capture(&w))
+}
+
+/// The area picker over one screen (physical pixels): dimmed, on top, takes the mouse. Its page
+/// sends `picker:done` with the area (physical pixels from the screen's corner) or null, then
+/// closes itself (`picker_close`). Async for the same reason as `overlay_open`.
+#[tauri::command]
+pub async fn picker_open(app: AppHandle, x: i32, y: i32, width: u32, height: u32) -> AppResult<()> {
+    if let Some(w) = app.get_webview_window(PICKER) {
+        let _ = w.destroy();
+    }
+    let w = WebviewWindowBuilder::new(&app, PICKER, WebviewUrl::App("index.html".into()))
+        .title("Choose an area")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .build()
+        .map_err(|e| AppError::Process(format!("Could not open the area picker: {e}")))?;
+    let _ = w.set_position(PhysicalPosition { x, y });
+    let _ = w.set_size(PhysicalSize { width, height });
+    let _ = exclude_from_capture(&w);
+    let _ = w.show();
+    let _ = w.set_focus();
+    Ok(())
+}
+
+#[tauri::command]
+pub fn picker_close(app: AppHandle) {
+    if let Some(w) = app.get_webview_window(PICKER) {
+        let _ = w.destroy();
+    }
 }
 
 /// Fit the overlay to what is recorded once it is known (a window's own rectangle).

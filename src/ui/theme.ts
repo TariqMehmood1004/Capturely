@@ -52,7 +52,8 @@ export function applyTheme(t: Theme | null, origin?: { x: number; y: number }) {
   doc
     .startViewTransition(set)
     .ready.then(() => {
-      root.animate([{ clipPath: `circle(0px at ${x}px ${y}px)` }, { clipPath: `circle(${r}px at ${x}px ${y}px)` }], { duration: 520, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)", fill: "both", pseudoElement: "::view-transition-new(root)" });
+      // The new look grows out of the switch over the old one, which stays still underneath.
+      root.animate([{ clipPath: `circle(0px at ${x}px ${y}px)` }, { clipPath: `circle(${r}px at ${x}px ${y}px)` }], { duration: 560, easing: "cubic-bezier(0.65, 0, 0.25, 1)", fill: "both", pseudoElement: "::view-transition-new(root)" });
     })
     .catch(() => undefined);
 }

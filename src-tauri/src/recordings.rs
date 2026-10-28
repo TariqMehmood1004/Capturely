@@ -99,7 +99,12 @@ pub struct TakeInfo {
     pub modified: u64,
     /// The recording has a sound track (checked for one take only: `take_get`).
     pub audio: Option<bool>,
+    /// Sounds kept on their own ("system", "mic": system.m4a, mic.m4a), for volumes in the editor.
+    pub sounds: Vec<String>,
 }
+
+/// The sound tracks a take keeps beside its recording.
+const SOUNDS: [&str; 2] = ["system", "mic"];
 
 fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
     let file = |n: &str| Some(dir.join(n)).filter(|p| p.is_file());
@@ -118,8 +123,9 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
         })
         .unwrap_or_default();
     exports.sort();
-    for p in video.iter().chain(camera.iter()).chain(exports.iter()) {
-        allow(app, p);
+    let sounds: Vec<String> = SOUNDS.iter().filter(|n| dir.join(format!("{n}.m4a")).is_file()).map(|n| n.to_string()).collect();
+    for p in video.iter().chain(camera.iter()).chain(exports.iter()).cloned().chain(sounds.iter().map(|n| dir.join(format!("{n}.m4a")))) {
+        allow(app, &p);
     }
     let bytes = std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()?.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
     let modified = std::fs::metadata(dir).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
@@ -133,6 +139,7 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
         bytes,
         modified,
         audio: None,
+        sounds,
     }
 }
 
@@ -222,27 +229,35 @@ async fn render(app: &AppHandle, registry: &JobRegistry, job_id: &str, mut cmd: 
     Ok(())
 }
 
-/// The camera's raw recording becomes the take's camera.mp4 (raw file removed).
+/// The camera's raw recording becomes the take's camera.mp4 (raw file removed); its first `skip`
+/// seconds came before the screen recording started and are left out.
 #[tauri::command]
-pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, raw: String, take: String, duration: f64) -> AppResult<String> {
+#[allow(clippy::too_many_arguments)]
+pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, raw: String, skip: Option<f64>, take: String, duration: f64) -> AppResult<String> {
     let raw = raw_file(&app, &raw)?;
     let out = take_dir(&app, &take)?.join("camera.mp4");
     let mut cmd = new_command(&tools::ffmpeg()?);
-    cmd.args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(&raw);
+    cmd.args(["-hide_banner", "-nostdin", "-y"]);
+    if let Some(s) = skip.filter(|s| *s > 0.005 && *s < 10.0) {
+        cmd.arg("-ss").arg(format!("{s:.3}"));
+    }
+    cmd.arg("-i").arg(&raw);
     cmd.args(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]);
     render(&app, &registry, &job_id, cmd, &out, duration, "the camera video").await?;
     let _ = std::fs::remove_file(raw);
     Ok(out.display().to_string())
 }
 
-/// Export: FFmpeg reads the take's recording (input 0) and camera (input 1, when used) and runs the
-/// filter graph made by the app (core/exportGraph.ts: zooms, frame, bubble; its size is the chosen
+/// Export: FFmpeg reads the take's recording (input 0) and the `inputs` the graph uses, numbered
+/// from 1 in that order: "camera" (camera.mp4), "cursor" (the smooth cursor image), "system" and
+/// "mic" (the separate sound tracks). It runs the filter graph made by the app
+/// (core/exportGraph.ts: blur, cursor, zooms, frame, bubble, text, cuts; its size is the chosen
 /// quality). Arguments are passed as an argv array; the graph is one argument. `format` is "mp4"
 /// (H.264/AAC, `encoding` "fast" | "balanced" | "quality") or "gif" (the graph makes the palette).
 /// Returns the export's path in the take folder.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, camera: bool, duration: f64, fps: u32, format: String, encoding: String) -> AppResult<String> {
+pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, inputs: Vec<String>, duration: f64, fps: u32, format: String, encoding: String) -> AppResult<String> {
     let gif = match format.as_str() {
         "mp4" => false,
         "gif" => true,
@@ -259,8 +274,17 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
     }
     let dir = take_dir(&app, &take)?;
     let video = dir.join("recording.mp4");
-    let cam = dir.join("camera.mp4");
-    if !video.is_file() || (camera && !cam.is_file()) {
+    let mut extra: Vec<PathBuf> = Vec::new();
+    for name in &inputs {
+        let p = match name.as_str() {
+            "camera" => dir.join("camera.mp4"),
+            "system" | "mic" => dir.join(format!("{name}.m4a")),
+            "cursor" => cursor_image(&app)?,
+            _ => return Err(AppError::Invalid("Unknown export input.".into())),
+        };
+        extra.push(p);
+    }
+    if !video.is_file() || extra.iter().any(|p| !p.is_file()) {
         return Err(AppError::Invalid("The recording's files are missing.".into()));
     }
     let ext = if gif { "gif" } else { "mp4" };
@@ -275,14 +299,15 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
     std::fs::write(&script, graph)?;
     let mut cmd = new_command(&tools::ffmpeg()?);
     cmd.args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(&video);
-    if camera {
-        cmd.arg("-i").arg(&cam);
+    for p in &extra {
+        cmd.arg("-i").arg(p);
     }
     cmd.arg("-filter_complex_script").arg(&script);
     if gif {
         cmd.args(["-map", "[vout]", "-an", "-loop", "0", "-r"]).arg(fps.clamp(5, 30).to_string());
     } else {
-        // With cuts the graph trims the sound too ([aout]); otherwise the recording's sound as is.
+        // The graph makes the sound ([aout]: volumes, cuts) when it changes it; otherwise the
+        // recording's sound as is.
         let sound = if graph_has_audio { "[aout]" } else { "0:a?" };
         cmd.args(["-map", "[vout]", "-map", sound, "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p", "-r"]);
         cmd.arg(fps.clamp(10, 60).to_string());
@@ -306,6 +331,93 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
     Ok(out.display().to_string())
 }
 
+/// The smooth cursor image (src/assets/cursor.png, built into the app), written once next to
+/// the raw recordings for FFmpeg to read.
+fn cursor_image(app: &AppHandle) -> AppResult<PathBuf> {
+    const PNG: &[u8] = include_bytes!("../../src/assets/cursor.png");
+    let p = raw_dir(app)?.join("cursor.png");
+    if std::fs::metadata(&p).map(|m| m.len() != PNG.len() as u64).unwrap_or(true) {
+        std::fs::write(&p, PNG)?;
+    }
+    Ok(p)
+}
+
+/// Still picture and silence in a take (core/quiet.ts keeps their overlap).
+#[derive(serde::Serialize)]
+pub struct QuietFound {
+    pub freezes: Vec<[f64; 2]>,
+    /// None when the recording has no sound.
+    pub silences: Option<Vec<[f64; 2]>>,
+}
+
+/// Spans from FFmpeg's metadata print: `start` and `end` keys; one left open runs to `duration`.
+fn spans_from(text: &str, start: &str, end: &str, duration: f64) -> Vec<[f64; 2]> {
+    let mut out = Vec::new();
+    let mut open: Option<f64> = None;
+    for line in text.lines() {
+        let value = |key: &str| line.strip_prefix(key).and_then(|v| v.strip_prefix('=')).and_then(|v| v.trim().parse::<f64>().ok());
+        if let Some(v) = value(start) {
+            open = Some(v.max(0.0));
+        } else if let (Some(v), Some(a)) = (value(end), open) {
+            out.push([a, v.min(duration)]);
+            open = None;
+        }
+    }
+    if let Some(a) = open {
+        out.push([a, duration]);
+    }
+    out
+}
+
+/// Find quiet parts: FFmpeg looks for a still picture and silence at least `min` seconds long
+/// (the picture at a small size, which is enough to see change, and much faster).
+#[tauri::command]
+pub async fn take_quiet(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, duration: f64, min: f64) -> AppResult<QuietFound> {
+    tools::validate_job_id(&job_id)?;
+    let dir = take_dir(&app, &take)?;
+    let video = dir.join("recording.mp4");
+    if !video.is_file() {
+        return Err(AppError::Invalid("The recording's files are missing.".into()));
+    }
+    let probe = std::process::Command::new(tools::ffprobe()?).args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=index", "-of", "csv=p=0"]).arg(&video).output()?;
+    let audio = !String::from_utf8_lossy(&probe.stdout).trim().is_empty();
+    // The metadata files are written in the raw folder (relative names: no paths to escape).
+    let raw = raw_dir(&app)?;
+    let vfile = format!("quiet-{job_id}-v.txt");
+    let afile = format!("quiet-{job_id}-a.txt");
+    let min = min.clamp(0.5, 30.0);
+    let guard = JobGuard::new(&registry, &job_id);
+    let mut cmd = new_command(&tools::ffmpeg()?);
+    cmd.current_dir(&raw).args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(&video);
+    cmd.args(["-map", "0:v:0", "-vf", &format!("scale=320:-2,freezedetect=n=0.003:d={min},metadata=mode=print:file={vfile}")]);
+    if audio {
+        cmd.args(["-map", "0:a:0", "-af", &format!("silencedetect=n=-42dB:d={min},ametadata=mode=print:file={afile}")]);
+    }
+    cmd.args(["-f", "null", "-", "-progress", "pipe:1", "-nostats"]);
+    let app2 = app.clone();
+    let id = job_id.clone();
+    let res = run_process(cmd, &guard.token, None, |line| {
+        if let Some(v) = line.strip_prefix("out_time_us=") {
+            if let Ok(us) = v.trim().parse::<f64>() {
+                emit_progress(&app2, &id, "quiet", (us / 1e6 / duration.max(0.001)).clamp(0.0, 1.0), None);
+            }
+        }
+    })
+    .await;
+    let read = |f: &str| std::fs::read_to_string(raw.join(f)).unwrap_or_default();
+    let found = QuietFound {
+        freezes: spans_from(&read(&vfile), "lavfi.freezedetect.freeze_start", "lavfi.freezedetect.freeze_end", duration),
+        silences: audio.then(|| spans_from(&read(&afile), "lavfi.silence_start", "lavfi.silence_end", duration)),
+    };
+    let _ = std::fs::remove_file(raw.join(&vfile));
+    let _ = std::fs::remove_file(raw.join(&afile));
+    match res {
+        Ok(o) if o.success => Ok(found),
+        Ok(o) => Err(AppError::Process(format!("Could not look for quiet parts: {}", summarize_stderr(&o.stderr_tail)))),
+        Err(e) => Err(e),
+    }
+}
+
 fn tools_tmp(app: &AppHandle, job_id: &str) -> AppResult<PathBuf> {
     tools::validate_job_id(job_id)?;
     Ok(raw_dir(app)?.join(format!("graph-{job_id}.txt")))
@@ -314,4 +426,15 @@ fn tools_tmp(app: &AppHandle, job_id: &str) -> AppResult<PathBuf> {
 #[tauri::command]
 pub fn free_space(app: AppHandle) -> AppResult<u64> {
     fs4::available_space(library_dir(&app)?).map_err(AppError::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::spans_from;
+
+    #[test]
+    fn quiet_spans_from_metadata() {
+        let text = "frame:90 pts:90 pts_time:3\nlavfi.freezedetect.freeze_start=3\nframe:210\nlavfi.freezedetect.freeze_end=7\nlavfi.freezedetect.freeze_start=9.5\n";
+        assert_eq!(spans_from(text, "lavfi.freezedetect.freeze_start", "lavfi.freezedetect.freeze_end", 10.0), vec![[3.0, 7.0], [9.5, 10.0]]);
+    }
 }

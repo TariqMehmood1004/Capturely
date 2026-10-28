@@ -197,10 +197,11 @@ export function LibraryPage({ fresh, onOpen, onRecord }: { fresh?: string | null
                 <span className="lib-thumb">
                   {t.video && <video src={`${platform.mediaUrl(t.video)}#t=1`} preload="metadata" muted />}
                   {samePath(t.path, fresh) && !selecting && <span className="lib-new">New</span>}
+                  {t.data && <span className="lib-dur">{formatTime(t.data.duration)}</span>}
                 </span>
                 <strong>{t.name}</strong>
                 <span className="muted-note">
-                  {t.data ? formatTime(t.data.duration) : "—"} · {size(t.bytes)}
+                  {new Date(t.modified).toLocaleDateString(undefined, { month: "short", day: "numeric" })} · {size(t.bytes)}
                   {t.exports.length ? ` · ${plural(t.exports.length, "export")}` : ""}
                 </span>
               </button>

@@ -1,12 +1,20 @@
+import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import cursorImg from "../assets/cursor.png";
+import { cursorAt, cursorImageShare, cursorTrack } from "../core/cursor";
 import { buildExportGraph, RING_TIME } from "../core/exportGraph";
+import { fitMark, newMark, type Mark } from "../core/marks";
+import { quietSpans } from "../core/quiet";
+import { isPlain, outDuration, rateAt, segments, SPEEDS } from "../core/timeline";
 import { DEFAULT_FRAME, FRAME_BACKGROUNDS, frameCss, type ScreenFrame } from "../core/frame";
 import { BUBBLE_SPOTS, type BubbleSpot } from "../core/recorder";
 import { clickRegions, pointerZooms, regionKeys, viewAt, zoomView, type AfterClick } from "../core/zoom";
-import { errorMessage, platform, type TakeInfo } from "../platform";
-import { addSplit, editedZooms, editZoom, EMPTY_EDIT, isCut, keptDuration, mergeSpans, pieces, playFrom, togglePiece, validEdit, type TakeEdit } from "../core/edits";
+import { errorMessage, platform, type ExportInput, type PlatformInfo, type TakeInfo } from "../platform";
+import { addSpeeds, addSplit, editedZooms, editZoom, EMPTY_EDIT, isCut, mergeSpans, pieces, playFrom, removeSpeeds, togglePiece, validEdit, type Span, type TakeEdit } from "../core/edits";
 import { DEFAULT_EXPORT, ENCODINGS, exportFps, exportSize, FPS_CHOICES, QUALITIES, savePreset, validExport, validPreset, type EditorPreset, type ExportSettings } from "../core/exportSettings";
 import { Dropdown, Segmented, Slider, Swatches, Switch } from "./controls";
+import { MOTION, reducedMotion } from "./motion";
+import { BoltIcon, ChatBubbleBottomCenterTextIcon, EyeSlashIcon, SpeakerWaveIcon } from "./icons";
 import { ArrowDownTrayIcon, ArrowUturnLeftIcon, ArrowUturnRightIcon, BackwardIcon, BookmarkIcon, ChevronDownIcon, CursorArrowRaysIcon, FilmIcon, FlagIcon, FolderOpenIcon, ForwardIcon, InformationCircleIcon, ListBulletIcon, MagnifyingGlassPlusIcon, PauseIcon, PhotoIcon, PlayIcon, ScissorsIcon, TrashIcon, VideoCameraIcon } from "./icons";
 import { formatTime } from "./motion";
 
@@ -14,8 +22,9 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 /** Time with tenths, for the timecode and the lists. */
 const stamp = (t: number) => `${formatTime(t)}.${Math.floor((Math.max(0, t) % 1) * 10)}`;
 const bytes = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
-type Tool = "zoom" | "clicks" | "frame" | "camera";
-type Pane = "details" | "clicks" | "markers";
+type Tool = "zoom" | "clicks" | "sound" | "frame" | "camera";
+type Pane = "details" | "clicks" | "markers" | "quiet" | "marks";
+const inMark = (m: Mark, t: number) => t >= m.a && t < m.b;
 
 /** Side panel, inspector and timeline sizes in px (the splitters change them). */
 interface Sizes {
@@ -59,6 +68,17 @@ function loadSizes(): Sizes {
  */
 export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => void }) {
   const [info, setInfo] = useState<TakeInfo | null>(null);
+  // The panels rise in one after another when the take opens.
+  const shell = useRef<HTMLElement | null>(null);
+  const shown = useRef(false);
+  useLayoutEffect(() => {
+    const el = shell.current;
+    if (!el || !info || shown.current) return;
+    shown.current = true;
+    if (reducedMotion()) return;
+    const panels = el.querySelectorAll(":scope > :not(.ed-split)");
+    gsap.fromTo(panels, { y: MOTION.rise, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: MOTION.base, ease: MOTION.ease, stagger: 0.05, clearProps: "transform,opacity,visibility" });
+  }, [info]);
   const [error, setError] = useState<string | null>(null);
   const [zoomOn, setZoomOn] = useState(true);
   const [depth, setDepth] = useState(1.8);
@@ -121,6 +141,23 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   useEffect(() => store(EXPORT_KEY, exp), [exp]);
   useEffect(() => store(PRESETS_KEY, presets), [presets]);
   const [room, setRoom] = useState({ w: 0, h: 0 });
+  // The font for text labels (and what else this system offers).
+  const [caps, setCaps] = useState<PlatformInfo | null>(null);
+  useEffect(() => {
+    void platform
+      .info()
+      .then(setCaps)
+      .catch(() => undefined);
+  }, []);
+  const [selMark, setSelMark] = useState<string | null>(null);
+  // Quiet parts found (null: not looked for yet), the search's progress, and the choices.
+  const [quiet, setQuiet] = useState<Span[] | null>(null);
+  const [finding, setFinding] = useState<number | null>(null);
+  const [quietMin, setQuietMin] = useState(2);
+  const [quietRate, setQuietRate] = useState<number>(4);
+  const cursorEl = useRef<HTMLImageElement | null>(null);
+  const sysAudio = useRef<HTMLAudioElement | null>(null);
+  const micAudio = useRef<HTMLAudioElement | null>(null);
   const canvas = useRef<HTMLDivElement | null>(null);
   const lanes = useRef<HTMLDivElement | null>(null);
   const scrubbing = useRef(false);
@@ -148,7 +185,9 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   }, [take]);
 
   const data = info?.data ?? null;
-  const duration = data?.duration ?? 0;
+  // The video's own length, once known: older takes saved a clock time a little past the picture.
+  const [videoLen, setVideoLen] = useState<number | null>(null);
+  const duration = videoLen && data ? Math.min(data.duration, videoLen) : (data?.duration ?? 0);
   // Click zooms from the recording, then the changes made to single zooms.
   const regions = useMemo(() => {
     if (!data || !data.clicks.length) return [];
@@ -159,7 +198,19 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const keys = useMemo(() => (zoomOn ? regionKeys(zoomList.filter((r) => !r.off)) : []), [zoomOn, zoomList]);
   const cutsRef = useRef(edit.cuts);
   cutsRef.current = edit.cuts;
-  const kept = keptDuration(duration, edit.cuts);
+  // The output's clock: cuts and sped-up stretches (core/timeline.ts).
+  const segs = useMemo(() => segments(duration, edit.cuts, edit.speeds), [duration, edit.cuts, edit.speeds]);
+  const segsRef = useRef(segs);
+  segsRef.current = segs;
+  const kept = outDuration(segs);
+  // The smooth cursor (takes recorded with it), drawn from the pointer path.
+  const smooth = data?.cursor === "smooth" && !!data.path.length;
+  const look = edit.cursor;
+  const track = useMemo(() => (smooth && data ? cursorTrack(data.path, duration, look.smooth) : []), [smooth, data, duration, look.smooth]);
+  const trackRef = useRef(track);
+  trackRef.current = track;
+  const sounds = info?.sounds ?? [];
+  const sep = info?.path.includes("\\") ? "\\" : "/";
 
   // Saved into take.json a moment after the last change.
   useEffect(() => {
@@ -192,6 +243,21 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
           }
         }
         setTime(t);
+        // Sped-up stretches play faster (the separate sounds too); the cursor follows its track.
+        const rate = rateAt(segsRef.current, t) || 1;
+        if (v.playbackRate !== rate) v.playbackRate = rate;
+        const p = cursorAt(trackRef.current, t);
+        if (p && cursorEl.current) {
+          cursorEl.current.style.left = `${p.x * 100}%`;
+          cursorEl.current.style.top = `${p.y * 100}%`;
+        }
+        for (const a of [sysAudio.current, micAudio.current]) {
+          if (!a) continue;
+          if (Math.abs(a.currentTime - t) > 0.2) a.currentTime = t;
+          if (a.playbackRate !== rate) a.playbackRate = rate;
+          if (v.paused && !a.paused) a.pause();
+          else if (!v.paused && a.paused) void a.play().catch(() => undefined);
+        }
         const z = viewAt(keys, t);
         if (picture.current) picture.current.style.transform = `scale(${z.z}) translate(${-zoomView(z.fx, z.z) * 100}%, ${-zoomView(z.fy, z.z) * 100}%)`;
         const c = cam.current;
@@ -202,6 +268,17 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [keys, duration]);
+
+  useEffect(() => {
+    const v = video.current;
+    const s = edit.sound;
+    if (v) {
+      v.muted = sounds.length > 0;
+      v.volume = Math.min(1, s.system);
+    }
+    if (sysAudio.current) sysAudio.current.volume = Math.min(1, s.system);
+    if (micAudio.current) micAudio.current.volume = Math.min(1, s.mic);
+  }, [edit.sound, sounds.length, info]);
 
   const toggle = () => {
     const v = video.current;
@@ -256,9 +333,17 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     const useCam = camOn && !!info.camera;
     const size = exportSize(data.width, data.height, exp.quality);
     const fps = exportFps(exp, data.fps);
-    const graph = buildExportGraph({ ...size, fps, keys, rings: rings ? data.clicks : [], frame, camera: useCam ? { spot, size: camSize } : null, gif: exp.format === "gif", cuts: edit.cuts, duration, audio: info.audio === true });
+    const gif = exp.format === "gif";
+    // Inputs after the recording, numbered in the order they are added.
+    const inputs: ExportInput[] = [];
+    const add = (n: ExportInput) => inputs.push(n);
+    const camera = useCam ? { spot, size: camSize, input: add("camera") } : null;
+    const cursor = smooth && look.on && track.length ? { track, look, input: add("cursor") } : null;
+    const s = edit.sound;
+    const sound = gif ? [] : sounds.length ? sounds.map((n) => ({ input: add(n), volume: n === "mic" ? s.mic : s.system, clean: n === "mic" && s.clean })) : info.audio ? [{ input: 0, volume: s.system, clean: s.clean }] : [];
+    const graph = buildExportGraph({ ...size, fps, keys, rings: rings ? data.clicks : [], frame, camera, gif, segments: segs, sound, cursor, marks: edit.marks, font: caps?.font ?? null });
     try {
-      const job = platform.takeExport(take, graph, useCam, kept, fps, exp.format, exp.encoding);
+      const job = platform.takeExport(take, graph, inputs, kept, fps, exp.format, exp.encoding);
       const off = await job.onProgress((p) => p >= 0 && setExporting(p));
       const out = await job.promise.finally(off);
       setExported(out);
@@ -268,6 +353,58 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     } finally {
       setExporting(null);
     }
+  };
+
+  /** Look for quiet parts (FFmpeg), then keep what is also free of pointer moves. */
+  const findQuiet = async () => {
+    setError(null);
+    setFinding(0);
+    try {
+      const job = platform.takeQuiet(take, duration, quietMin);
+      const off = await job.onProgress((p) => p >= 0 && setFinding(p));
+      const r = await job.promise.finally(off);
+      const spans = (l: Array<[number, number]>) => l.map(([a, b]) => ({ a, b }));
+      setQuiet(quietSpans(spans(r.freezes), r.silences ? spans(r.silences) : null, (data?.path ?? []).map((x) => x.t), quietMin));
+    } catch (e) {
+      setError(`Quiet parts could not be found: ${errorMessage(e)}`);
+    } finally {
+      setFinding(null);
+    }
+  };
+
+  const addMark = (kind: Mark["kind"]) => {
+    const m = newMark(kind, time, duration);
+    setEdit({ ...editRef.current, marks: [...editRef.current.marks, m] });
+    setSelMark(m.id);
+  };
+  const changeMark = (id: string, patch: Partial<Mark>, key = "") => setEdit({ ...editRef.current, marks: editRef.current.marks.map((m) => (m.id === id ? fitMark({ ...m, ...patch }, duration) : m)) }, key);
+  const deleteMark = (id: string) => {
+    setEdit({ ...editRef.current, marks: editRef.current.marks.filter((m) => m.id !== id) });
+    setSelMark(null);
+  };
+  /** Drag a mark on the picture: move it, or (`size`) resize it from its corner. */
+  const dragMark = (m: Mark, mode: "move" | "size") => (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    setSelMark(m.id);
+    setPane("marks");
+    const host = e.currentTarget.closest(m.kind === "blur" ? ".take-picture" : ".take-stage");
+    if (!host) return;
+    const r = host.getBoundingClientRect();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    const move = (ev: PointerEvent) => {
+      const dx = (ev.clientX - x0) / r.width;
+      const dy = (ev.clientY - y0) / r.height;
+      changeMark(m.id, mode === "move" ? { x: m.x + dx, y: m.y + dy } : { w: m.w + dx, h: m.h + dy }, `mark-${m.id}`);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   };
 
   // The picture is as large as the canvas allows while keeping the recording's shape.
@@ -300,7 +437,8 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   };
   /** Delete key: removes (or brings back) the selected piece, or turns the selected zoom off/on. */
   const removeSel = () => {
-    if (sel?.kind === "piece") {
+    if (selMark) deleteMark(selMark);
+    else if (sel?.kind === "piece") {
       const p = pieces(duration, editRef.current.splits)[sel.i];
       if (p) setEdit(togglePiece(editRef.current, p, duration));
     } else if (sel?.kind === "zoom") {
@@ -387,17 +525,20 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     { id: "details", icon: InformationCircleIcon, label: "Details" },
     { id: "clicks", icon: ListBulletIcon, label: "Clicks" },
     { id: "markers", icon: FlagIcon, label: "Markers" },
+    { id: "quiet", icon: BoltIcon, label: "Quiet" },
+    { id: "marks", icon: EyeSlashIcon, label: "Blur, text" },
   ];
   const tabs: ReadonlyArray<{ id: Tool; icon: typeof PhotoIcon; label: string }> = [
     { id: "zoom", icon: MagnifyingGlassPlusIcon, label: "Zoom" },
     { id: "clicks", icon: CursorArrowRaysIcon, label: "Cursor" },
+    { id: "sound", icon: SpeakerWaveIcon, label: "Sound" },
     { id: "frame", icon: PhotoIcon, label: "Frame" },
     ...(info.camera ? [{ id: "camera" as const, icon: VideoCameraIcon, label: "Camera" }] : []),
   ];
   const created = data?.createdAt ? new Date(data.createdAt) : null;
 
   return (
-    <main className="ed" style={{ "--lib": `${sizes.lib}px`, "--insp": `${sizes.insp}px`, "--tl": `${sizes.tl}px` } as CSSProperties}>
+    <main className="ed" ref={shell} style={{ "--lib": `${sizes.lib}px`, "--insp": `${sizes.insp}px`, "--tl": `${sizes.tl}px` } as CSSProperties}>
       <div className="ed-split v s1" role="separator" aria-orientation="vertical" aria-label="Resize the side panel" onPointerDown={startResize("lib", 1, "x")} onDoubleClick={() => setSizes((s) => ({ ...s, lib: DEFAULT_SIZES.lib }))} />
       <div className="ed-split v s2" role="separator" aria-orientation="vertical" aria-label="Resize the inspector" onPointerDown={startResize("insp", -1, "x")} onDoubleClick={() => setSizes((s) => ({ ...s, insp: DEFAULT_SIZES.insp }))} />
       <div className="ed-split h s3" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" onPointerDown={startResize("tl", -1, "y")} onDoubleClick={() => setSizes((s) => ({ ...s, tl: DEFAULT_SIZES.tl }))} />
@@ -431,7 +572,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             <dl className="ed-stats">
               <div>
                 <dt>Length</dt>
-                <dd>{edit.cuts.length ? `${formatTime(kept)} of ${formatTime(duration)}` : formatTime(duration)}</dd>
+                <dd>{!isPlain(segs) ? `${formatTime(kept)} of ${formatTime(duration)}` : formatTime(duration)}</dd>
               </div>
               <div>
                 <dt>Size</dt>
@@ -447,7 +588,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               </div>
               <div>
                 <dt>Source</dt>
-                <dd>{data?.source === "window" ? "Window" : "Screen"}</dd>
+                <dd>{data?.source === "window" ? "Window" : data?.source === "area" ? "Area" : "Screen"}</dd>
               </div>
               <div>
                 <dt>Camera</dt>
@@ -528,6 +669,135 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             ) : (
               <p className="ed-empty">No markers. Add them with the flag on the capture bar while recording.</p>
             )}
+          </div>
+        )}
+        {pane === "quiet" && (
+          <div className="ed-pane" key="quiet">
+            <div className="ed-pane-head">
+              <h3>Quiet parts</h3>
+              {quiet && <span className="ed-count">{quiet.length}</span>}
+            </div>
+            <p className="ed-hint">Stretches where the picture stays still, no one speaks and the mouse rests. Speed them up or cut them.</p>
+            <div className="ed-card">
+              <div className="ed-field">
+                <span>At least</span>
+                <Segmented wide label="Shortest quiet part" value={quietMin} onChange={setQuietMin} options={[2, 3, 5].map((v) => ({ value: v, label: `${v} s` }))} />
+              </div>
+              <button className="btn primary" onClick={() => void findQuiet()} disabled={finding !== null || !data}>
+                <BoltIcon aria-hidden /> {finding !== null ? `Looking… ${Math.round(finding * 100)}%` : quiet ? "Look again" : "Find quiet parts"}
+              </button>
+            </div>
+            {quiet &&
+              (quiet.length ? (
+                <>
+                  <div className="ed-card">
+                    <div className="ed-field">
+                      <span>Speed up by</span>
+                      <Segmented wide label="Speed up by" value={quietRate} onChange={setQuietRate} options={SPEEDS.map((r) => ({ value: r, label: `${r}×` }))} />
+                    </div>
+                    <div className="ed-pane-actions glide">
+                      <span className="glide-pill" aria-hidden />
+                      <button className="btn" onClick={() => setEdit(addSpeeds(editRef.current, quiet, quietRate))}>
+                        <ForwardIcon aria-hidden /> Speed up all
+                      </button>
+                      <button className="btn ghost" onClick={() => setEdit({ ...editRef.current, cuts: mergeSpans([...editRef.current.cuts, ...quiet], duration) })}>
+                        <ScissorsIcon aria-hidden /> Cut all
+                      </button>
+                    </div>
+                  </div>
+                  <div className="ed-list glide">
+                    <span className="glide-pill" aria-hidden />
+                    {quiet.map((q) => {
+                      const sp = edit.speeds.find((x) => x.a < q.b && x.b > q.a);
+                      const cut = isCut(edit.cuts, (q.a + q.b) / 2);
+                      return (
+                        <div key={q.a} className="ed-quiet">
+                          <button className="ed-row" onClick={() => seekTo(q.a)}>
+                            <BoltIcon aria-hidden />
+                            <span>
+                              {stamp(q.a)}–{stamp(q.b)}
+                              <em>{cut ? "Cut" : sp ? `${sp.rate}× faster` : `${(q.b - q.a).toFixed(1)} s`}</em>
+                            </span>
+                          </button>
+                          <button className={sp ? "ed-icon on" : "ed-icon"} onClick={() => setEdit(sp ? removeSpeeds(editRef.current, [q]) : addSpeeds(editRef.current, [q], quietRate))} aria-label={sp ? "Normal speed" : "Speed up"} title={sp ? "Back to normal speed" : `Speed up ${quietRate}×`}>
+                            <ForwardIcon aria-hidden />
+                          </button>
+                          <button className={cut ? "ed-icon on" : "ed-icon"} onClick={() => setEdit(togglePiece(editRef.current, q, duration))} aria-label={cut ? "Bring back" : "Cut"} title={cut ? "Bring back" : "Cut it"}>
+                            <ScissorsIcon aria-hidden />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <p className="ed-empty">No quiet parts of {quietMin} s or longer.</p>
+              ))}
+            {edit.speeds.length > 0 && (
+              <div className="ed-section-head">
+                <span>{edit.speeds.length} sped up</span>
+                <button className="ed-reset" onClick={() => setEdit({ ...editRef.current, speeds: [] })}>
+                  Normal speed
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {pane === "marks" && (
+          <div className="ed-pane" key="marks">
+            <div className="ed-pane-head">
+              <h3>Blur and text</h3>
+              <span className="ed-count">{edit.marks.length}</span>
+            </div>
+            <div className="ed-pane-actions glide">
+              <span className="glide-pill" aria-hidden />
+              <button className="btn" onClick={() => addMark("blur")}>
+                <EyeSlashIcon aria-hidden /> Add blur
+              </button>
+              <button className="btn" onClick={() => addMark("text")}>
+                <ChatBubbleBottomCenterTextIcon aria-hidden /> Add text
+              </button>
+            </div>
+            <p className="ed-hint">Added at the playhead for 3 s. Drag it on the picture to move it; drag a blur's corner to resize it. A blur zooms with the recording; text stays put.</p>
+            {edit.marks.some((m) => m.kind === "text") && caps && !caps.font && <p className="ed-note warn">No font was found on this computer, so text is left out of exports.</p>}
+            {edit.marks.map((m) => {
+              const on = m.id === selMark;
+              return (
+                <div key={m.id} className={on ? "ed-card ed-mark on" : "ed-card ed-mark"}>
+                  <button className="ed-row" onClick={() => (setSelMark(on ? null : m.id), seekTo(m.a))}>
+                    {m.kind === "blur" ? <EyeSlashIcon aria-hidden /> : <ChatBubbleBottomCenterTextIcon aria-hidden />}
+                    <span>
+                      {m.kind === "blur" ? "Blur" : m.text || "Text"}
+                      <em>
+                        {stamp(m.a)}–{stamp(m.b)}
+                      </em>
+                    </span>
+                  </button>
+                  {on && (
+                    <>
+                      {m.kind === "text" && (
+                        <>
+                          <input className="ui-input" value={m.text ?? ""} maxLength={120} onChange={(e) => changeMark(m.id, { text: e.target.value }, `text-${m.id}`)} aria-label="Text" placeholder="Text" />
+                          <Slider label="Size" value={m.size ?? 0.045} min={0.02} max={0.12} step={0.005} format={(v) => pct(v * 10)} onChange={(v) => changeMark(m.id, { size: v }, `size-${m.id}`)} />
+                        </>
+                      )}
+                      <div className="ed-mark-times">
+                        <button className="btn ghost" onClick={() => changeMark(m.id, { a: time })} title="Start at the playhead">
+                          From {stamp(m.a)}
+                        </button>
+                        <button className="btn ghost" onClick={() => changeMark(m.id, { b: time })} title="End at the playhead">
+                          To {stamp(m.b)}
+                        </button>
+                        <button className="ed-icon" onClick={() => deleteMark(m.id)} aria-label="Delete" title="Delete (Delete key)">
+                          <TrashIcon aria-hidden />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </aside>
@@ -644,11 +914,29 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
           {stageW > 0 && (
             <div className="take-stage" style={{ width: stageW, aspectRatio: String(ar), containerType: "inline-size", ...(fcss ? fcss.stage : {}) }}>
               <div className="take-picture" style={fcss ? { position: "absolute", ...fcss.picture } : undefined}>
-                <video ref={(el) => void ((video.current = el), (picture.current = el))} src={info.video ? platform.mediaUrl(info.video) : undefined} onEnded={() => setPlaying(false)} onClick={toggle} preload="auto" />
+                <video ref={(el) => void ((video.current = el), (picture.current = el))} src={info.video ? platform.mediaUrl(info.video) : undefined} onLoadedMetadata={(e) => setVideoLen(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : null)} onEnded={() => setPlaying(false)} onClick={toggle} preload="auto" />
                 {ringNow.map((r) => (
                   <i key={r.k} className="take-ring" style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%` }} />
                 ))}
+                {edit.marks
+                  .filter((m) => m.kind === "blur" && (inMark(m, time) || m.id === selMark))
+                  .map((m) => (
+                    <div key={m.id} className={[ "take-blur", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()} style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, width: `${m.w * 100}%`, height: `${m.h * 100}%` }} onPointerDown={dragMark(m, "move")}>
+                      {m.id === selMark && <i className="take-handle" onPointerDown={dragMark(m, "size")} aria-hidden />}
+                    </div>
+                  ))}
+                {smooth && look.on && <img ref={cursorEl} className="take-cursor" src={cursorImg} alt="" style={{ height: `${cursorImageShare(look.size) * 100}%` }} draggable={false} />}
               </div>
+              {edit.marks
+                .filter((m) => m.kind === "text" && (inMark(m, time) || m.id === selMark))
+                .map((m) => {
+                  const px = (m.size ?? 0.045) * (stageW / ar);
+                  return (
+                    <div key={m.id} className={["take-text", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()} style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, fontSize: px, padding: px * 0.4 }} onPointerDown={dragMark(m, "move")}>
+                      {m.text || "Text"}
+                    </div>
+                  );
+                })}
               {info.camera && camOn && (
                 <span className={`take-cam ${spot}`} style={{ width: `${camSize * 100}%` }}>
                   <video ref={cam} src={platform.mediaUrl(info.camera)} muted preload="auto" />
@@ -656,6 +944,8 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               )}
             </div>
           )}
+          {sounds.includes("system") && info.path && <audio ref={sysAudio} src={platform.mediaUrl(`${info.path}${sep}system.m4a`)} preload="auto" />}
+          {sounds.includes("mic") && info.path && <audio ref={micAudio} src={platform.mediaUrl(`${info.path}${sep}mic.m4a`)} preload="auto" />}
           {(error || exported) && (
             <p className={error ? "ed-note error" : "ed-note"} role={error ? "alert" : "status"}>
               {error ?? `Exported and checked: ${exported?.split(/[\\/]/).pop()}`}
@@ -768,6 +1058,73 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                 </div>
               </div>
               <p className="ed-hint">{data?.clicks.length ?? 0} clicks were recorded. Rings and zooms follow them.</p>
+              <div className="ed-section-head">
+                <span>Smooth cursor</span>
+                {smooth && (
+                  <button className="ed-reset" onClick={() => setEdit({ ...editRef.current, cursor: EMPTY_EDIT.cursor })}>
+                    Reset
+                  </button>
+                )}
+              </div>
+              {smooth ? (
+                <>
+                  <div className="ed-card">
+                    <div className="ed-line">
+                      <span>
+                        <strong>Smooth cursor</strong>
+                        <em>{look.on ? "Drawn from the mouse path" : "No cursor in the video"}</em>
+                      </span>
+                      <Switch on={look.on} label="Smooth cursor" onChange={(on) => setEdit({ ...editRef.current, cursor: { ...look, on } })} />
+                    </div>
+                  </div>
+                  {look.on && (
+                    <div className="ed-card">
+                      <Slider label="Size" value={look.size} min={0.6} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(size) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, size } }, "cursor-size")} />
+                      <Slider label="Smoothing" value={look.smooth} min={0} max={1} step={0.05} format={pct} onChange={(v) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, smooth: v } }, "cursor-smooth")} />
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="ed-hint">This recording has its own cursor. Choose Cursor: Smooth in the capture bar's settings before recording to get a smooth, larger cursor here.</p>
+              )}
+            </>
+          )}
+
+          {tool === "sound" && (
+            <>
+              <div className="ed-section-head">
+                <span>Sound</span>
+                <button className="ed-reset" onClick={() => setEdit({ ...editRef.current, sound: EMPTY_EDIT.sound })}>
+                  Reset
+                </button>
+              </div>
+              {!sounds.length && !info.audio ? (
+                <p className="ed-hint">This recording has no sound.</p>
+              ) : (
+                <>
+                  <div className="ed-card">
+                    {sounds.length ? (
+                      sounds.map((n) => (
+                        <Slider key={n} label={n === "mic" ? "Microphone" : "System sound"} value={n === "mic" ? edit.sound.mic : edit.sound.system} min={0} max={2} step={0.05} format={pct} onChange={(v) => setEdit({ ...editRef.current, sound: { ...editRef.current.sound, [n]: v } }, `vol-${n}`)} />
+                      ))
+                    ) : (
+                      <Slider label="Volume" value={edit.sound.system} min={0} max={2} step={0.05} format={pct} onChange={(v) => setEdit({ ...editRef.current, sound: { ...editRef.current.sound, system: v } }, "vol-system")} />
+                    )}
+                  </div>
+                  {(sounds.includes("mic") || !sounds.length) && (
+                    <div className="ed-card">
+                      <div className="ed-line">
+                        <span>
+                          <strong>{sounds.length ? "Clean up the microphone" : "Clean up noise"}</strong>
+                          <em>{edit.sound.clean ? "Hiss and hum lowered when exporting" : "Off"}</em>
+                        </span>
+                        <Switch on={edit.sound.clean} label="Clean up noise" onChange={(clean) => setEdit({ ...editRef.current, sound: { ...editRef.current.sound, clean } })} />
+                      </div>
+                    </div>
+                  )}
+                  <p className="ed-hint">The preview plays up to 100%; louder volumes and the cleanup are applied when exporting.{sounds.length ? "" : " This recording keeps its sounds mixed, so they share one volume."}</p>
+                </>
+              )}
             </>
           )}
 
@@ -866,7 +1223,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             <i className="marker" aria-hidden /> Marker
           </span>
           <span className="grow" />
-          {edit.cuts.length > 0 && <span className="ed-chip accent">After cuts {stamp(kept)}</span>}
+          {!isPlain(segs) && <span className="ed-chip accent">Final length {stamp(kept)}</span>}
           <span className="ed-hint-inline">Click a piece or a zoom to select · S splits · Delete removes</span>
         </div>
         <div className="ed-tl-body">
@@ -939,6 +1296,11 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             </div>
             {mergeSpans(edit.cuts, duration).map((c) => (
               <i key={`${c.a}`} className="ed-cutmask" style={{ left: at(c.a), width: at(c.b - c.a) }} aria-hidden />
+            ))}
+            {edit.speeds.map((x) => (
+              <i key={`sp-${x.a}`} className="ed-speedmask" style={{ left: at(x.a), width: at(x.b - x.a) }} aria-hidden>
+                <b>{x.rate}×</b>
+              </i>
             ))}
             <i className="ed-playhead" style={{ left: at(time) }} aria-hidden />
           </div>
