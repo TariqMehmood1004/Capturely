@@ -1,8 +1,8 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect } from "../core/recorder";
+import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect, type ScreenClick } from "../core/recorder";
 import type { AfterClick } from "../core/zoom";
-import { errorMessage, platform, type CaptureTargets, type PlatformInfo, type ScreenArea, type TakeData } from "../platform";
+import { errorMessage, platform, type CaptureTargets, type Encoder, type PlatformInfo, type Quality, type ScreenArea, type TakeData } from "../platform";
 import {
   ArrowPathIcon,
   CheckIcon,
@@ -46,6 +46,11 @@ interface Prefs {
   ripples: boolean;
   cursor: boolean;
   fps: 30 | 60;
+  /** Who encodes the picture: the processor (x264) or a graphics card. */
+  encoder: Encoder;
+  quality: Quality;
+  /** FFmpeg's messages kept as capture.log in the take. */
+  keepLog: boolean;
   countdown: 0 | 3 | 5;
   limit: 0 | 1 | 5 | 10 | 30;
   noise: boolean;
@@ -53,13 +58,18 @@ interface Prefs {
   speed: number;
 }
 const PREFS_KEY = "reelifcapture.prefs";
-const DEFAULT_PREFS: Prefs = { surface: "monitor", systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursor: true, fps: 60, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1 };
+const DEFAULT_PREFS: Prefs = { surface: "monitor", systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursor: true, fps: 30, encoder: "cpu", quality: "high", keepLog: true, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1 };
 const BUBBLE_SIZE = { small: 0.17, medium: 0.22, large: 0.3 } as const;
 const NEXT_COUNTDOWN = { 0: 3, 3: 5, 5: 0 } as const;
 const MIN_FREE = 1.5e9;
+const ENCODER_LABEL: Record<Encoder, string> = { cpu: "CPU", nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
+const QUALITY_NOTE: Record<Quality, string> = { standard: "Smaller files", high: "Sharp text, moderate files", best: "Sharpest, largest files" };
 function loadPrefs(): Prefs {
   try {
-    return { ...DEFAULT_PREFS, ...(JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>) };
+    const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
+    // Choices saved before the encoder setting had 60 fps as the default; 30 is the default now.
+    if (saved.encoder === undefined) delete saved.fps;
+    return { ...DEFAULT_PREFS, ...saved };
   } catch {
     return DEFAULT_PREFS;
   }
@@ -128,7 +138,12 @@ interface Run {
   sinks: Array<{ kind: "mic" | "camera"; path: string; sink: Sink }>;
   take: string;
   rect: MonitorRect | null;
+  /** When the picture started (performance.now()); recording time counts from here. */
   t0: number;
+  /** When the microphone and camera recorders started (before the picture). */
+  sinkAt: number;
+  /** When the click log started. */
+  clickAt: number;
   pausedAt: number | null;
   pausedTotal: number;
   pauses: Array<{ a: number; b: number }>;
@@ -146,7 +161,7 @@ const STEP_LABEL: Record<Step, string> = { save: "Saving the recording", video: 
 export default function Bar() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const set = (c: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...c }));
-  const { surface, systemAudio, mic, cam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursor, fps, countdown, limit, noise, scriptOn, speed } = prefs;
+  const { surface, systemAudio, mic, cam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursor, fps, encoder, quality, keepLog, countdown, limit, noise, scriptOn, speed } = prefs;
   const [phase, setPhase] = useState<Phase>("idle");
   const [panel, setPanel] = useState<Panel>(null);
   const [moreTab, setMoreTab] = useState<"recording" | "effects" | "script">("recording");
@@ -159,6 +174,14 @@ export default function Bar() {
     void platform
       .info()
       .then(setCaps)
+      .catch(() => undefined);
+  }, []);
+  // Graphics card encoders that work here (checked once, in the background).
+  const [gpus, setGpus] = useState<Encoder[]>([]);
+  useEffect(() => {
+    void platform
+      .captureEncoders()
+      .then(setGpus)
       .catch(() => undefined);
   }, []);
   /** What is recorded: a saved window choice falls back to the screen where windows cannot be. */
@@ -449,9 +472,14 @@ export default function Bar() {
     setElapsed(0);
     setMarkers(0);
     setOverLimit(false);
+    r.sinkAt = now();
     r.sinks.forEach((x) => x.sink.rec.start(1000));
-    r.rect = await platform.captureStart({ kind: src, monitor: monitorIdx, window: windowId, fps, cursor, systemAudio: caps.systemAudio && systemAudio });
+    const started = await platform.captureStart({ kind: src, monitor: monitorIdx, window: windowId, fps, cursor, systemAudio: caps.systemAudio && systemAudio, encoder, quality, keepLog });
+    r.rect = started.rect;
+    // The clock starts with the picture (FFmpeg started `lead` seconds ago), not before it.
+    r.t0 = now() - started.lead * 1000;
     if (src === "window" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
+    r.clickAt = now();
     if (clickZoom || ripples) await platform.clickLogStart().catch(() => undefined);
     setPhase("recording");
   };
@@ -471,7 +499,7 @@ export default function Bar() {
     if (src === "window" && !windowId) return setError("Choose the window to record.");
     const free = await platform.freeSpace().catch(() => Number.POSITIVE_INFINITY);
     if (free < MIN_FREE) return setError(`Only ${(free / 1e9).toFixed(1)} GB is free in your Videos folder. Free at least 1.5 GB and try again.`);
-    const r: Run = { streams: [], micStream: null, camStream: null, sinks: [], take: "", rect: null, t0: 0, pausedAt: null, pausedTotal: 0, pauses: [], markers: [] };
+    const r: Run = { streams: [], micStream: null, camStream: null, sinks: [], take: "", rect: null, t0: 0, sinkAt: 0, clickAt: 0, pausedAt: null, pausedTotal: 0, pauses: [], markers: [] };
     run.current = r;
     void platform.editor.minimize().catch(() => undefined);
     try {
@@ -544,18 +572,24 @@ export default function Bar() {
     void platform.bar.show().catch(() => undefined);
     try {
       const log = clickZoom || ripples ? await platform.clickLogStop().catch(() => null) : null;
+      // Click times count from the click log's start; recording time from the picture's.
+      const shift = (pts: ScreenClick[]) => pts.map((c) => ({ ...c, ms: c.ms + (r.clickAt - r.t0) }));
       await Promise.all(r.sinks.map((x) => x.sink.finish()));
       stopAll();
       const micRaw = r.sinks.find((x) => x.kind === "mic")?.path ?? null;
       const camRaw = r.sinks.find((x) => x.kind === "camera")?.path ?? null;
       setStep("video");
-      const job = platform.captureFinish(micRaw, r.take, length);
+      // The microphone and camera started before the picture; that part is left out.
+      const skip = Math.max(0, (r.t0 - r.sinkAt) / 1000);
+      const job = platform.captureFinish(micRaw, skip, r.take, length);
       const off = await job.onProgress((p) => setProgress(p));
-      await job.promise.finally(off);
+      const made = await job.promise.finally(off);
+      // The take is as long as its video (the clock can run a little longer than the picture).
+      const duration = made.duration ?? length;
       if (camRaw) {
         setStep("camera");
         setProgress(null);
-        const cj = platform.cameraFinish(camRaw, r.take, length);
+        const cj = platform.cameraFinish(camRaw, skip, r.take, duration);
         const off2 = await cj.onProgress((p) => setProgress(p));
         await cj.promise.finally(off2);
       }
@@ -565,13 +599,13 @@ export default function Bar() {
       const data: TakeData = {
         version: 1,
         createdAt: new Date().toISOString(),
-        duration: length,
+        duration,
         width: area.width,
         height: area.height,
         fps,
         source: src,
-        clicks: log ? onRecording(log.clicks, area, r.pauses) : [],
-        path: log ? onRecording(log.moves, area, r.pauses) : [],
+        clicks: log ? onRecording(shift(log.clicks), area, r.pauses).filter((c) => c.t <= duration) : [],
+        path: log ? onRecording(shift(log.moves), area, r.pauses).filter((c) => c.t <= duration) : [],
         markers: r.markers,
         zoom: { on: clickZoom, depth: zoomDepth, hold: zoomHold, after },
         ripples,
@@ -736,8 +770,19 @@ export default function Bar() {
               <div className="cb-more-body" key={moreTab}>
                 {moreTab === "recording" && (
                   <div className="cb-box">
-                    <Setting title="Frame rate" note="60 fps for smooth motion">
+                    <Setting title="Frame rate" note={fps === 60 ? "Smoother, needs a faster computer" : "Lighter, smooth for most screens"}>
                       <Segmented label="Frame rate" value={fps} onChange={(v) => set({ fps: v })} options={[{ value: 30, label: "30" }, { value: 60, label: "60" }]} />
+                    </Setting>
+                    {caps.os === "windows" && (
+                      <Setting title="Encoder" note={encoder === "cpu" ? (gpus.length ? "Processor; works everywhere" : "Processor; no graphics card encoder found") : "Graphics card; less work for the processor"}>
+                        <Segmented label="Encoder" value={gpus.includes(encoder) ? encoder : "cpu"} onChange={(v) => set({ encoder: v })} options={(["cpu", ...gpus] as Encoder[]).map((e) => ({ value: e, label: ENCODER_LABEL[e] }))} />
+                      </Setting>
+                    )}
+                    <Setting title="Quality" note={QUALITY_NOTE[quality]}>
+                      <Segmented label="Quality" value={quality} onChange={(v) => set({ quality: v })} options={[{ value: "standard", label: "Standard" }, { value: "high", label: "High" }, { value: "best", label: "Best" }]} />
+                    </Setting>
+                    <Setting title="Keep FFmpeg log" note={keepLog ? "Saved as capture.log in the take" : "Not kept"}>
+                      <Switch on={keepLog} label="Keep FFmpeg log" onChange={(v) => set({ keepLog: v })} />
                     </Setting>
                     <Setting title="Stop after" note={limit ? `Stops by itself at ${limit}:00` : "Records until you stop"}>
                       <Segmented label="Stop after" value={limit} onChange={(v) => set({ limit: v })} options={[{ value: 0, label: "Off" }, { value: 1, label: "1m" }, { value: 5, label: "5m" }, { value: 10, label: "10m" }, { value: 30, label: "30m" }]} />

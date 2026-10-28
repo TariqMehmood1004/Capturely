@@ -1,22 +1,22 @@
-/* ReeliF Capture by SyntaxilitY: flat surfaces, red for recording, violet for choices. The theme
+/* ReeliF Capture by SyntaxilitY: flat cool-slate surfaces, red for recording, indigo for choices. The theme
    follows Windows (Settings > Personalization > Colors > app mode) until one is chosen in the
    title bar (data-theme="dark" | "light" on <html>, ui/theme.ts). */
 :root {
-  --bg: #0b0b0e;
-  --surface: #121216;
-  --surface-2: #18181d;
-  --surface-3: #23232a;
-  --text: #ececf1;
-  --muted: #8d8d99;
-  --accent: #8b5cf6;
-  --accent-soft: color-mix(in srgb, #8b5cf6 22%, transparent);
+  --bg: #0c0e13;
+  --surface: #14171f;
+  --surface-2: #1a1e28;
+  --surface-3: #252a37;
+  --text: #e9ecf3;
+  --muted: #8a91a3;
+  --accent: #6c6cff;
+  --accent-soft: color-mix(in srgb, #6c6cff 22%, transparent);
   --accent-ink: #fff;
   --ok: #22c55e;
-  --danger: #f43f5e;
-  --rec: #f43f5e;
+  --danger: #ff4d5e;
+  --rec: #ff4d5e;
   --rec-soft: color-mix(in srgb, var(--rec) 16%, transparent);
-  --radius: 12px;
-  --radius-sm: 8px;
+  --radius: 14px;
+  --radius-sm: 9px;
   --fast: 0.18s;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
@@ -26,54 +26,54 @@
   --scroll-hover: color-mix(in srgb, var(--text) 32%, transparent);
   --lift: 0 6px 18px rgb(0 0 0 / 0.22), 0 1px 3px rgb(0 0 0 / 0.18);
   --fill-ink: rgb(255 255 255 / 0.2);
-  --marker: #f59e0b;
-  --stage: #08080a;
-  --clip: #1f1f25;
+  --marker: #f5a524;
+  --stage: #090b0f;
+  --clip: #232a3c;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
   :root:not([data-theme="dark"]) {
-    --bg: #f3f3f6;
+    --bg: #eceef4;
     --surface: #ffffff;
-    --surface-2: #f4f4f7;
-    --surface-3: #e7e7ec;
-    --text: #18181b;
-    --muted: #6b6b78;
-    --accent: #7c3aed;
-    --accent-soft: color-mix(in srgb, #7c3aed 13%, transparent);
+    --surface-2: #f5f6fa;
+    --surface-3: #e5e8f0;
+    --text: #151821;
+    --muted: #646b7d;
+    --accent: #5250e8;
+    --accent-soft: color-mix(in srgb, #5250e8 13%, transparent);
     --ok: #16a34a;
-    --danger: #e11d48;
-    --rec: #e11d48;
+    --danger: #e5304a;
+    --rec: #e5304a;
     --rec-soft: color-mix(in srgb, var(--rec) 12%, transparent);
     --hover: color-mix(in srgb, var(--surface-3) 80%, #000 6%);
     --thumb: var(--accent);
     --lift: 0 6px 18px rgb(20 20 40 / 0.12), 0 1px 3px rgb(20 20 40 / 0.1);
     --marker: #d97706;
-    --stage: #e4e4e9;
-    --clip: #e6e3f3;
+    --stage: #e1e4ec;
+    --clip: #e2e4fb;
     color-scheme: light;
   }
 }
 /* Chosen in the title bar (ui/theme.ts): light even when Windows is dark. */
 :root[data-theme="light"] {
-  --bg: #f3f3f6;
+  --bg: #eceef4;
   --surface: #ffffff;
-  --surface-2: #f4f4f7;
-  --surface-3: #e7e7ec;
-  --text: #18181b;
-  --muted: #6b6b78;
-  --accent: #7c3aed;
-  --accent-soft: color-mix(in srgb, #7c3aed 13%, transparent);
+  --surface-2: #f5f6fa;
+  --surface-3: #e5e8f0;
+  --text: #151821;
+  --muted: #646b7d;
+  --accent: #5250e8;
+  --accent-soft: color-mix(in srgb, #5250e8 13%, transparent);
   --ok: #16a34a;
-  --danger: #e11d48;
-  --rec: #e11d48;
+  --danger: #e5304a;
+  --rec: #e5304a;
   --rec-soft: color-mix(in srgb, var(--rec) 12%, transparent);
   --hover: color-mix(in srgb, var(--surface-3) 80%, #000 6%);
   --thumb: var(--accent);
   --lift: 0 6px 18px rgb(20 20 40 / 0.12), 0 1px 3px rgb(20 20 40 / 0.1);
   --marker: #d97706;
-  --stage: #e4e4e9;
-  --clip: #e6e3f3;
+  --stage: #e1e4ec;
+  --clip: #e2e4fb;
   color-scheme: light;
 }
 ::selection {
@@ -1008,8 +1008,8 @@ input {
    Windows confirms the window is left out of the recording), grey while paused, and the
    countdown in the middle. */
 .ov {
-  --frame: #f5c518;
-  --w: 4px;
+  --frame: #facc15;
+  --w: 2px;
   position: fixed;
   inset: 0;
   display: grid;
@@ -1019,11 +1019,13 @@ input {
   --frame: #9ca3af;
 }
 /* Four edges, so the frame can trace itself around the area (GSAP). The overlay is a centring
-   grid: edges stretch themselves, or they would shrink to nothing there. */
+   grid: edges stretch themselves, or they would shrink to nothing there. A faint glow keeps a
+   2 px line visible over busy screens without looking heavy. */
 .ov-edge {
   position: absolute;
   place-self: stretch;
   background: var(--frame);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--frame) 55%, transparent);
   transition: background 0.25s var(--ease);
 }
 .ov-edge.top,
@@ -1056,25 +1058,58 @@ input {
   text-transform: uppercase;
   translate: -50% 0;
 }
-.cd-card {
+/* Countdown: no card. The number floats over whatever is on screen (a soft shadow keeps it
+   readable on light and dark content) inside a ring that runs out each second. */
+.cd {
+  position: relative;
   display: grid;
-  justify-items: center;
-  gap: 6px;
-  width: 168px;
-  padding: 22px 0 18px;
-  border-radius: 28px;
-  background: var(--surface-2);
+  place-items: center;
+  width: 220px;
+  height: 220px;
+  color: #fff;
+  pointer-events: none;
 }
-.cd-card span {
-  font-size: 88px;
-  font-weight: 700;
+.cd-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  rotate: -90deg;
+  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.55)) drop-shadow(0 2px 8px rgb(0 0 0 / 0.4));
+}
+.cd-ring circle {
+  fill: none;
+  stroke-width: 5;
+}
+.cd-track {
+  stroke: rgb(255 255 255 / 0.4);
+}
+.cd-run {
+  stroke: #fff;
+  stroke-linecap: round;
+}
+.cd-num,
+.cd-ghost {
+  grid-area: 1 / 1;
+  font-size: 104px;
+  font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  text-shadow: 0 0 2px rgb(0 0 0 / 0.6), 0 2px 10px rgb(0 0 0 / 0.5), 0 10px 40px rgb(0 0 0 / 0.45);
 }
-.cd-card em {
+.cd-ghost:empty {
+  display: none;
+}
+.cd em {
+  position: absolute;
+  bottom: -30px;
   font-size: 12px;
   font-style: normal;
-  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 0 2px rgb(0 0 0 / 0.7), 0 1px 8px rgb(0 0 0 / 0.6);
 }
 @media (prefers-reduced-motion: reduce) {
   .cb-progress i.busy {
@@ -2716,5 +2751,298 @@ body.resizing-y * {
   from {
     transform: rotate(-90deg) scale(0.6);
     opacity: 0;
+  }
+}
+
+/* ---- Layout and motion refresh (2026-10-28) ----
+   Editor panels float on the page colour with 8 px gutters and rounded corners; buttons answer a
+   press; cards lift a little on hover. Motion is off under reduced motion. */
+.ed {
+  grid-template-columns: 64px var(--lib, 260px) 8px minmax(0, 1fr) 8px var(--insp, 320px);
+  grid-template-rows: minmax(0, 1fr) 8px var(--tl, 196px);
+  padding: 8px;
+}
+.ed-rail,
+.ed-library,
+.ed-player,
+.ed-inspector,
+.ed-timeline {
+  border-radius: var(--radius);
+}
+.ed-player-head {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.ed-transport {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.ed-stage .take-stage {
+  border-radius: var(--radius-sm);
+}
+.ed-card,
+.lib-card {
+  transition: background var(--fast) var(--ease), translate 0.25s var(--ease);
+}
+.lib-card:hover {
+  translate: 0 -2px;
+}
+.btn,
+.cb-icon,
+.cb-rec,
+.cb-stop,
+.ed-icon,
+.ed-play,
+.ed-export,
+.ed-rail-btn,
+.theme-btn,
+.win-btn {
+  transition-property: background, color, opacity, scale;
+  transition-duration: var(--fast);
+  transition-timing-function: var(--ease);
+}
+.btn:active:not(:disabled),
+.cb-icon:active:not(:disabled),
+.cb-rec:active:not(:disabled),
+.cb-stop:active:not(:disabled),
+.ed-icon:active:not(:disabled),
+.ed-play:active:not(:disabled),
+.ed-export:active:not(:disabled),
+.ed-rail-btn:active,
+.theme-btn:active {
+  scale: 0.94;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lib-card:hover {
+    translate: none;
+  }
+  .btn,
+  .cb-icon,
+  .cb-rec,
+  .cb-stop,
+  .ed-icon,
+  .ed-play,
+  .ed-export,
+  .ed-rail-btn,
+  .theme-btn,
+  .win-btn,
+  .ed-card,
+  .lib-card {
+    transition: none;
+    scale: none;
+  }
+}
+.ed-rail {
+  margin-right: 8px;
+}
+
+/* ---- Modern pass (2026-10-28) ----
+   Display type for titles, a title bar that melts into the page, a gallery-style library, a
+   segmented inspector, a bigger transport and a capture bar with a calmer, rounder shape. */
+:root {
+  --titlebar-h: 48px;
+  --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --ring: 0 0 0 4px var(--accent-soft);
+}
+h1,
+h2,
+h3,
+.project-title,
+.brand-name {
+  font-family: var(--display);
+  letter-spacing: -0.01em;
+}
+
+/* Title bar: page colour, more air; New recording is a solid red pill. */
+.topbar {
+  padding-left: 14px;
+  background: var(--bg);
+}
+.brand-name {
+  font-size: 14px;
+}
+.topnav {
+  padding: 4px;
+  background: var(--surface);
+}
+.topnav button,
+.topnav-pill {
+  height: 28px;
+}
+.topnav-pill {
+  top: 4px;
+  background: var(--accent-soft);
+}
+.topnav button.on {
+  color: var(--accent);
+}
+.project-title {
+  font-size: 13.5px;
+}
+.btn.rec-new {
+  height: 32px;
+  padding: 0 14px 0 12px;
+  border-radius: 999px;
+  background: var(--rec);
+  color: #fff;
+  font-weight: 600;
+}
+.btn.rec-new:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rec) 88%, #fff);
+}
+.rec-new .rec-dot {
+  background: #fff;
+}
+
+/* Library: a big title, a roomy gallery, thumbnails that carry the length. */
+.page {
+  padding: 12px 32px 32px;
+}
+.lib-head {
+  margin: 14px 0 22px;
+}
+.lib-head h2 {
+  font-size: 26px;
+  font-weight: 600;
+}
+.lib-grid {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 22px 18px;
+}
+.lib-card,
+.lib-card:hover {
+  background: transparent;
+  translate: none;
+}
+.lib-open {
+  gap: 2px;
+  padding: 0 0 6px;
+}
+.lib-open strong {
+  margin-top: 4px;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lib-thumb {
+  margin-bottom: 6px;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+  transition: translate 0.3s var(--ease), box-shadow 0.3s var(--ease);
+}
+.lib-thumb video {
+  transition: scale 0.5s var(--ease), filter 0.3s var(--ease);
+}
+.lib-card:hover .lib-thumb {
+  translate: 0 -3px;
+  box-shadow: 0 12px 28px rgb(0 0 0 / 0.18);
+}
+.lib-card:hover .lib-thumb video {
+  scale: 1.04;
+  filter: brightness(1.05);
+}
+.lib-open:focus-visible {
+  outline: none;
+}
+.lib-open:focus-visible .lib-thumb {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+.lib-dur {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.lib-card.fresh {
+  background: transparent;
+}
+.lib-card.fresh .lib-thumb {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+.lib-card::before {
+  inset: -6px;
+}
+.lib-del {
+  top: 8px !important;
+  right: 8px !important;
+}
+
+/* Editor: segmented inspector tabs, a bigger play button, softer rail. */
+.ed-tabs {
+  gap: 2px;
+  margin: 10px 10px 2px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.ed-tab {
+  height: 32px;
+  border-radius: 999px;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.ed-tab::after {
+  display: none;
+}
+.ed-tab.on {
+  background: var(--surface);
+  color: var(--accent);
+}
+.ed-play {
+  width: 46px;
+  height: 46px;
+  box-shadow: var(--ring);
+}
+.ed-play svg {
+  width: 20px;
+  height: 20px;
+}
+.ed-transport {
+  height: 60px;
+}
+.ed-rail-btn {
+  border-radius: 12px;
+}
+.ed-rail-btn.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.ed-pane-head h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.ed-lane.clip span {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+}
+
+/* Capture bar: a rounder, airier shape; the record button wears a soft halo. */
+.cb-bar {
+  height: 60px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+}
+.cb-card {
+  border-radius: 22px;
+}
+.cb-rec {
+  width: 42px;
+  height: 42px;
+  box-shadow: 0 0 0 5px var(--rec-soft);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lib-thumb,
+  .lib-thumb video {
+    transition: none;
+  }
+  .lib-card:hover .lib-thumb {
+    translate: none;
+  }
+  .lib-card:hover .lib-thumb video {
+    scale: none;
   }
 }

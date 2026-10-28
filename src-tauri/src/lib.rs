@@ -58,6 +58,7 @@ pub fn run() {
             capture::capture_pause,
             capture::capture_cancel,
             capture::capture_finish,
+            capture::capture_encoders,
             clicks::click_log_start,
             clicks::click_log_stop,
             recordings::take_create,

@@ -56,6 +56,63 @@ pub struct CaptureSpec {
     pub fps: u32,
     pub cursor: bool,
     pub system_audio: bool,
+    /// "cpu" (x264), or a graphics card's encoder: "nvidia" (NVENC), "intel" (Quick Sync), "amd" (AMF).
+    #[serde(default = "default_encoder")]
+    pub encoder: String,
+    /// "standard", "high" or "best".
+    #[serde(default = "default_quality")]
+    pub quality: String,
+    /// FFmpeg's messages and frame counts are kept as capture.log in the take.
+    #[serde(default = "default_true")]
+    pub keep_log: bool,
+}
+
+fn default_encoder() -> String {
+    "cpu".into()
+}
+fn default_quality() -> String {
+    "high".into()
+}
+fn default_true() -> bool {
+    true
+}
+
+/// The graphics card encoders this computer can use (Windows), checked once.
+#[tauri::command]
+pub async fn capture_encoders() -> Vec<String> {
+    static FOUND: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    if let Some(found) = FOUND.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return found;
+    }
+    let mut found = Vec::new();
+    if cfg!(windows) {
+        if let Ok(ffmpeg) = tools::ffmpeg() {
+            for (id, codec) in [("nvidia", "h264_nvenc"), ("intel", "h264_qsv"), ("amd", "h264_amf")] {
+                let mut cmd = new_command(&ffmpeg);
+                cmd.args(["-hide_banner", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=s=256x256:d=0.1", "-pix_fmt", "nv12", "-c:v", codec, "-f", "null", "-"]);
+                if matches!(cmd.output().await, Ok(o) if o.status.success()) {
+                    found.push(id.to_string());
+                }
+            }
+        }
+    }
+    *FOUND.lock().unwrap_or_else(|e| e.into_inner()) = Some(found.clone());
+    found
+}
+
+/// What was started: the recorded area, and how long ago the picture started (seconds), so the
+/// recorder's clock starts with the video.
+#[derive(Serialize)]
+pub struct CaptureStarted {
+    pub rect: CaptureRect,
+    pub lead: f64,
+}
+
+/// The finished recording and its real length in seconds (from FFprobe).
+#[derive(Serialize)]
+pub struct CaptureResult {
+    pub path: String,
+    pub duration: Option<f64>,
 }
 
 /// What was recorded, in screen pixels (clicks are mapped onto it).
@@ -80,7 +137,13 @@ struct Running {
     dir: PathBuf,
     segments: Vec<PathBuf>,
     ffmpeg: Option<Child>,
+    /// When the running segment's FFmpeg was started.
+    started: Option<Instant>,
     audio: Option<audio::Loopback>,
+    /// System sound started this long before the picture (seconds); skipped when mixing.
+    wav_skip: f64,
+    /// What happened, for capture.log (each segment's command, encoder fallbacks).
+    notes: Vec<String>,
 }
 
 static CAPTURE: Mutex<Option<Running>> = Mutex::new(None);
@@ -115,20 +178,27 @@ pub fn capture_targets(app: AppHandle) -> AppResult<CaptureTargets> {
 #[cfg(windows)]
 fn video_input(run: &Running, fps: u32, even: &str) -> AppResult<Vec<String>> {
     let spec = &run.spec;
+    // Both sources give frames on the graphics card. The CPU encoder needs them in memory; NVENC
+    // and AMF take them as they are; Quick Sync takes them mapped to its own frames.
+    let to_encoder = match spec.encoder.as_str() {
+        "nvidia" | "amd" => String::new(),
+        "intel" => ",hwmap=derive_device=qsv,format=qsv".to_string(),
+        _ => format!(",hwdownload,format=bgra,{even}"),
+    };
     let mut a: Vec<String> = Vec::new();
     match spec.kind.as_str() {
         "monitor" => {
             let idx = spec.monitor.unwrap_or(0);
             a.extend(["-f".into(), "lavfi".into(), "-i".into()]);
-            a.push(format!("ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={},hwdownload,format=bgra,{even}", u8::from(spec.cursor)));
+            a.push(format!("ddagrab=output_idx={idx}:framerate={fps}:draw_mouse={}{to_encoder}", u8::from(spec.cursor)));
         }
         "window" => {
             // That window only (also when covered), by its handle; a resized window keeps its
-            // first size, scaled to fit.
+            // first size, scaled to fit; the size is rounded down to even numbers.
             let hwnd: u64 = spec.window.as_deref().unwrap_or("").parse().map_err(|_| AppError::Invalid("Choose a window to record.".into()))?;
             a.extend(["-f".into(), "lavfi".into(), "-i".into()]);
             a.push(format!(
-                "gfxcapture=hwnd={hwnd}:max_framerate={fps}:capture_cursor={}:resize_mode=scale_aspect,hwdownload,format=bgra,{even}",
+                "gfxcapture=hwnd={hwnd}:max_framerate={fps}:capture_cursor={}:resize_mode=scale_aspect:width=-2:height=-2{to_encoder}",
                 u8::from(spec.cursor)
             ));
         }
@@ -167,10 +237,30 @@ fn video_input(_run: &Running, _fps: u32, _even: &str) -> AppResult<Vec<String>>
     Err(AppError::Invalid("Screen recording is not available on this system.".into()))
 }
 
+/// Encoder arguments for the chosen encoder and quality. Graphics card encoders exist on Windows only.
+fn encoder_args(encoder: &str, quality: &str) -> Vec<String> {
+    // standard, high, best: lighter files first.
+    let q = |v: [&'static str; 3]| match quality {
+        "standard" => v[0],
+        "best" => v[2],
+        _ => v[1],
+    };
+    let a: Vec<&str> = match encoder {
+        "nvidia" => vec!["-c:v", "h264_nvenc", "-preset", q(["p1", "p2", "p4"]), "-tune", "ll", "-rc", "vbr", "-cq", q(["28", "23", "19"]), "-b:v", "0"],
+        "intel" => vec!["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", q(["28", "23", "19"])],
+        "amd" => vec!["-c:v", "h264_amf", "-usage", "lowlatency", "-quality", "speed", "-rc", "cqp", "-qp_i", q(["28", "23", "19"]), "-qp_p", q(["30", "25", "21"])],
+        // The CPU encoder: the lightest presets, so the computer keeps up while recording.
+        _ => vec!["-c:v", "libx264", "-preset", q(["ultrafast", "superfast", "veryfast"]), "-crf", q(["26", "21", "18"]), "-pix_fmt", "yuv420p"],
+    };
+    a.into_iter().map(String::from).collect()
+}
+
 fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
     let fps = run.spec.fps.clamp(10, 60);
     let even = "scale=trunc(iw/2)*2:trunc(ih/2)*2";
-    let mut a: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into(), "-y".into()];
+    // Warnings, and each second the frame count with dropped and repeated frames (for capture.log).
+    // FFmpeg only reads the "q" that ends a segment when it reports, so the period stays short.
+    let mut a: Vec<String> = ["-hide_banner", "-loglevel", "warning", "-stats", "-stats_period", "1", "-y"].iter().map(|s| s.to_string()).collect();
     a.extend(video_input(run, fps, even)?);
     // Linux: what the computer plays, from the default output's monitor (PulseAudio / PipeWire).
     if run.seg_audio {
@@ -180,23 +270,35 @@ fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
     if !cfg!(windows) {
         a.extend(["-vf".into(), even.into()]);
     }
-    a.extend(
-        ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", "-pix_fmt", "yuv420p", "-r"]
-            .iter()
-            .map(|s| s.to_string()),
-    );
+    a.extend(encoder_args(&run.spec.encoder, &run.spec.quality));
+    a.push("-r".into());
     a.push(fps.to_string());
     a.push(out.display().to_string());
     Ok(a)
 }
 
-/// Start one video segment (stdin kept open: "q" ends it cleanly).
+/// Start one video segment; a graphics card encoder that fails at once is replaced by the CPU's.
 fn spawn_segment(run: &mut Running) -> AppResult<()> {
+    match start_segment(run) {
+        Err(e) if run.spec.encoder != "cpu" => {
+            log::warn!("{} encoder failed, using the CPU: {e}", run.spec.encoder);
+            run.notes.push(format!("The {} encoder did not start ({e}); recording with the CPU instead.", run.spec.encoder));
+            run.spec.encoder = "cpu".into();
+            start_segment(run)
+        }
+        r => r,
+    }
+}
+
+/// Start one video segment (stdin kept open: "q" ends it cleanly).
+fn start_segment(run: &mut Running) -> AppResult<()> {
     let out = run.dir.join(format!("segment-{}.mkv", run.segments.len()));
     // FFmpeg's own messages go to a file beside the segment, for when the source fails.
     let errors = out.with_extension("log");
+    let args = ffmpeg_args(run, &out)?;
+    run.notes.push(format!("segment {}: ffmpeg {}", run.segments.len(), args.join(" ")));
     let mut cmd = std::process::Command::new(tools::ffmpeg()?);
-    cmd.args(ffmpeg_args(run, &out)?).stdin(Stdio::piped()).stdout(Stdio::null());
+    cmd.args(&args).stdin(Stdio::piped()).stdout(Stdio::null());
     match std::fs::File::create(&errors) {
         Ok(f) => cmd.stderr(f),
         Err(_) => cmd.stderr(Stdio::null()),
@@ -207,6 +309,7 @@ fn spawn_segment(run: &mut Running) -> AppResult<()> {
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
     let mut child = cmd.spawn().map_err(|e| AppError::Process(format!("Could not start the screen capture: {e}")))?;
+    let started = Instant::now();
     #[cfg(windows)]
     end_with_app(&child);
     // A source that cannot be opened (a closed window, a missing screen) ends at once.
@@ -220,6 +323,7 @@ fn spawn_segment(run: &mut Running) -> AppResult<()> {
     }
     run.segments.push(out);
     run.ffmpeg = Some(child);
+    run.started = Some(started);
     Ok(())
 }
 
@@ -268,8 +372,12 @@ fn end_segment(run: &mut Running) {
 
 /// Start recording; returns the recorded area in screen pixels (for click zooms).
 #[tauri::command]
-pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureRect> {
-    log::info!("capture start: {} (screen {:?}, window {:?}, {} fps)", spec.kind, spec.monitor, spec.window, spec.fps);
+pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<CaptureStarted> {
+    let mut spec = spec;
+    if !cfg!(windows) {
+        spec.encoder = "cpu".into();
+    }
+    log::info!("capture start: {} (screen {:?}, window {:?}, {} fps, {} encoder, {} quality)", spec.kind, spec.monitor, spec.window, spec.fps, spec.encoder, spec.quality);
     if let Some(why) = crate::sys::info().blocked {
         return Err(AppError::Invalid(why));
     }
@@ -290,22 +398,38 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
     let dir = crate::recordings::raw_dir(&app)?.join(format!("capture-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)?;
     let seg_audio = cfg!(target_os = "linux") && spec.system_audio;
-    let mut run = Running { spec: spec.clone(), rect, device, seg_audio, dir, segments: Vec::new(), ffmpeg: None, audio: None };
-    if let Err(e) = spawn_segment(&mut run) {
-        // No sound server (or no output to listen to): record the picture without system sound.
-        if !run.seg_audio {
-            return Err(e);
-        }
-        log::warn!("system sound unavailable, recording without it: {e}");
-        run.seg_audio = false;
-        spawn_segment(&mut run)?;
-    }
+    let mut run = Running { spec: spec.clone(), rect, device, seg_audio, dir, segments: Vec::new(), ffmpeg: None, started: None, audio: None, wav_skip: 0.0, notes: Vec::new() };
+    // System sound starts first (it takes a moment); what it records before the picture starts
+    // is skipped when the sound is mixed.
+    let audio_at = Instant::now();
     if spec.system_audio && cfg!(windows) {
         // Without a sound device the recording simply has no system sound.
         run.audio = audio::Loopback::start(run.dir.join("system.wav")).ok();
     }
+    if let Err(e) = spawn_segment(&mut run) {
+        // No sound server (or no output to listen to): record the picture without system sound.
+        if !run.seg_audio {
+            if let Some(a) = run.audio.take() {
+                a.stop();
+            }
+            let _ = std::fs::remove_dir_all(&run.dir);
+            return Err(e);
+        }
+        log::warn!("system sound unavailable, recording without it: {e}");
+        run.seg_audio = false;
+        if let Err(e) = spawn_segment(&mut run) {
+            if let Some(a) = run.audio.take() {
+                a.stop();
+            }
+            let _ = std::fs::remove_dir_all(&run.dir);
+            return Err(e);
+        }
+    }
+    let started = run.started.unwrap_or_else(Instant::now);
+    run.wav_skip = started.duration_since(audio_at).as_secs_f64();
+    let lead = started.elapsed().as_secs_f64();
     *lock() = Some(run);
-    Ok(rect)
+    Ok(CaptureStarted { rect, lead })
 }
 
 /// Pause (end the segment, stop writing sound) or resume (a new segment).
@@ -342,21 +466,69 @@ fn cancel_now() {
     }
 }
 
+/// The length of a media file in seconds, from FFprobe.
+async fn probe_duration(file: &std::path::Path) -> Option<f64> {
+    let mut cmd = new_command(&tools::ffprobe().ok()?);
+    cmd.args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"]).arg(file);
+    let out = cmd.output().await.ok().filter(|o| o.status.success())?;
+    String::from_utf8_lossy(&out.stdout).trim().parse::<f64>().ok().filter(|d| d.is_finite() && *d > 0.0)
+}
+
+/// capture.log in the take: the settings, each segment's command and FFmpeg's own messages (with
+/// its frame counts each second: `dup=` counts repeated frames, a sign the computer fell behind).
+fn write_log(take: &std::path::Path, spec: &CaptureSpec, notes: &[String], segments: &[PathBuf], finish: &str) {
+    let mut body = format!(
+        "ReeliF Capture {}\nsource: {}  fps: {}  encoder: {}  quality: {}\n\n",
+        env!("CARGO_PKG_VERSION"),
+        spec.kind,
+        spec.fps,
+        spec.encoder,
+        spec.quality
+    );
+    for n in notes {
+        body.push_str(n);
+        body.push('\n');
+    }
+    for (i, seg) in segments.iter().enumerate() {
+        let text = std::fs::read_to_string(seg.with_extension("log")).unwrap_or_default();
+        body.push_str(&format!("\n--- segment {i} ---\n"));
+        // Progress lines end in a carriage return; one line each here.
+        for line in text.split(['\r', '\n']).map(str::trim_end).filter(|l| !l.is_empty()) {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    if !finish.trim().is_empty() {
+        body.push_str("\n--- joining and sound ---\n");
+        body.push_str(finish.trim());
+        body.push('\n');
+    }
+    if let Err(e) = std::fs::write(take.join("capture.log"), body) {
+        log::warn!("capture.log: {e}");
+    }
+}
+
 /// Stop, then join the segments and mix system sound and the microphone (`mic`: a raw recording of
-/// the recorder, or none) into the take's recording.mp4; returns its path. The capture folder is removed.
+/// the recorder, or none; its first `mic_skip` seconds came before the picture) into the take's
+/// recording.mp4; returns its path and real length. The capture folder is removed.
 #[tauri::command]
-pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, mic: Option<String>, take: String, duration: f64) -> AppResult<String> {
+#[allow(clippy::too_many_arguments)]
+pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, mic: Option<String>, mic_skip: Option<f64>, take: String, duration: f64) -> AppResult<CaptureResult> {
     let take = crate::recordings::take_dir(&app, &take)?;
     tools::validate_job_id(&job_id)?;
-    let (dir, segments, wav, seg_audio) = {
+    let (dir, all_segments, wav, seg_audio, wav_skip, spec, notes) = {
         let mut guard = lock();
         let mut run = guard.take().ok_or_else(|| AppError::Invalid("Nothing is being recorded.".into()))?;
         end_segment(&mut run);
         let wav = run.audio.take().map(|a| a.stop()).filter(|p| std::fs::metadata(p).map(|m| m.len() > 1024).unwrap_or(false));
-        (run.dir, run.segments, wav, run.seg_audio)
+        (run.dir, run.segments, wav, run.seg_audio, run.wav_skip, run.spec, run.notes)
     };
+    let segments = all_segments.clone();
     let segments: Vec<PathBuf> = segments.into_iter().filter(|s| std::fs::metadata(s).map(|m| m.len() > 0).unwrap_or(false)).collect();
     if segments.is_empty() {
+        if spec.keep_log {
+            write_log(&take, &spec, &notes, &all_segments, "Nothing was recorded.");
+        }
         let _ = std::fs::remove_dir_all(&dir);
         return Err(AppError::Process("Nothing was recorded.".into()));
     }
@@ -374,7 +546,12 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
     cmd.args(["-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i"]).arg(&list);
     // Sounds to mix: the segments' own (Linux system sound), the system WAV (Windows), the microphone.
     let mut labels: Vec<String> = if seg_audio { vec!["[0:a]".into()] } else { Vec::new() };
-    for (i, p) in [wav.as_ref(), mic.as_ref()].into_iter().flatten().enumerate() {
+    let mic_skip = mic_skip.unwrap_or(0.0);
+    for (i, (p, skip)) in [wav.as_ref().map(|w| (w, wav_skip)), mic.as_ref().map(|m| (m, mic_skip))].into_iter().flatten().enumerate() {
+        // Sound recorded before the picture started is left out, so both stay in step.
+        if skip > 0.005 && skip < 10.0 {
+            cmd.arg("-ss").arg(format!("{skip:.3}"));
+        }
         cmd.arg("-i").arg(p);
         labels.push(format!("[{}:a]", i + 1));
     }
@@ -396,6 +573,13 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
         }
     })
     .await;
+    if spec.keep_log {
+        let finish = match &res {
+            Ok(o) => o.stderr_tail.clone(),
+            Err(e) => e.to_string(),
+        };
+        write_log(&take, &spec, &notes, &all_segments, &finish);
+    }
     let done = match res {
         Ok(o) if o.success => std::fs::rename(&partial, &out).map_err(AppError::from),
         Ok(o) => Err(AppError::Process(format!("Could not make the recording: {}", summarize_stderr(&o.stderr_tail)))),
@@ -410,7 +594,9 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
     if let Err(e) = app.asset_protocol_scope().allow_file(&out) {
         log::warn!("asset scope: {e}");
     }
-    Ok(out.display().to_string())
+    let real = probe_duration(&out).await;
+    log::info!("recording made: {:.2} s on the clock, {real:?} s of video", duration);
+    Ok(CaptureResult { path: out.display().to_string(), duration: real })
 }
 
 #[cfg(windows)]

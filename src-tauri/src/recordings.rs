@@ -222,13 +222,19 @@ async fn render(app: &AppHandle, registry: &JobRegistry, job_id: &str, mut cmd: 
     Ok(())
 }
 
-/// The camera's raw recording becomes the take's camera.mp4 (raw file removed).
+/// The camera's raw recording becomes the take's camera.mp4 (raw file removed); its first `skip`
+/// seconds came before the screen recording started and are left out.
 #[tauri::command]
-pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, raw: String, take: String, duration: f64) -> AppResult<String> {
+#[allow(clippy::too_many_arguments)]
+pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, raw: String, skip: Option<f64>, take: String, duration: f64) -> AppResult<String> {
     let raw = raw_file(&app, &raw)?;
     let out = take_dir(&app, &take)?.join("camera.mp4");
     let mut cmd = new_command(&tools::ffmpeg()?);
-    cmd.args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(&raw);
+    cmd.args(["-hide_banner", "-nostdin", "-y"]);
+    if let Some(s) = skip.filter(|s| *s > 0.005 && *s < 10.0) {
+        cmd.arg("-ss").arg(format!("{s:.3}"));
+    }
+    cmd.arg("-i").arg(&raw);
     cmd.args(["-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"]);
     render(&app, &registry, &job_id, cmd, &out, duration, "the camera video").await?;
     let _ = std::fs::remove_file(raw);

@@ -5,6 +5,9 @@ import { installGlide } from "./ui/glide";
 import { applyTheme, chosenTheme } from "./ui/theme";
 import "./styles.css";
 
+// Outside Tauri in development (design work in a browser), a stand-in answers the app's calls.
+if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) await import("./dev/tauriMock");
+
 // One page per window (shell.rs): "main" is the capture bar, "overlay" the frame (and countdown)
 // over what is recorded, "editor" the full window for the library and takes.
 const Bar = lazy(() => import("./ui/Bar"));

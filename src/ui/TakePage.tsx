@@ -1,3 +1,4 @@
+import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { buildExportGraph, RING_TIME } from "../core/exportGraph";
 import { DEFAULT_FRAME, FRAME_BACKGROUNDS, frameCss, type ScreenFrame } from "../core/frame";
@@ -7,6 +8,7 @@ import { errorMessage, platform, type TakeInfo } from "../platform";
 import { addSplit, editedZooms, editZoom, EMPTY_EDIT, isCut, keptDuration, mergeSpans, pieces, playFrom, togglePiece, validEdit, type TakeEdit } from "../core/edits";
 import { DEFAULT_EXPORT, ENCODINGS, exportFps, exportSize, FPS_CHOICES, QUALITIES, savePreset, validExport, validPreset, type EditorPreset, type ExportSettings } from "../core/exportSettings";
 import { Dropdown, Segmented, Slider, Swatches, Switch } from "./controls";
+import { MOTION, reducedMotion } from "./motion";
 import { ArrowDownTrayIcon, ArrowUturnLeftIcon, ArrowUturnRightIcon, BackwardIcon, BookmarkIcon, ChevronDownIcon, CursorArrowRaysIcon, FilmIcon, FlagIcon, FolderOpenIcon, ForwardIcon, InformationCircleIcon, ListBulletIcon, MagnifyingGlassPlusIcon, PauseIcon, PhotoIcon, PlayIcon, ScissorsIcon, TrashIcon, VideoCameraIcon } from "./icons";
 import { formatTime } from "./motion";
 
@@ -59,6 +61,17 @@ function loadSizes(): Sizes {
  */
 export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => void }) {
   const [info, setInfo] = useState<TakeInfo | null>(null);
+  // The panels rise in one after another when the take opens.
+  const shell = useRef<HTMLElement | null>(null);
+  const shown = useRef(false);
+  useLayoutEffect(() => {
+    const el = shell.current;
+    if (!el || !info || shown.current) return;
+    shown.current = true;
+    if (reducedMotion()) return;
+    const panels = el.querySelectorAll(":scope > :not(.ed-split)");
+    gsap.fromTo(panels, { y: MOTION.rise, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: MOTION.base, ease: MOTION.ease, stagger: 0.05, clearProps: "transform,opacity,visibility" });
+  }, [info]);
   const [error, setError] = useState<string | null>(null);
   const [zoomOn, setZoomOn] = useState(true);
   const [depth, setDepth] = useState(1.8);
@@ -148,7 +161,9 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   }, [take]);
 
   const data = info?.data ?? null;
-  const duration = data?.duration ?? 0;
+  // The video's own length, once known: older takes saved a clock time a little past the picture.
+  const [videoLen, setVideoLen] = useState<number | null>(null);
+  const duration = videoLen && data ? Math.min(data.duration, videoLen) : (data?.duration ?? 0);
   // Click zooms from the recording, then the changes made to single zooms.
   const regions = useMemo(() => {
     if (!data || !data.clicks.length) return [];
@@ -397,7 +412,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const created = data?.createdAt ? new Date(data.createdAt) : null;
 
   return (
-    <main className="ed" style={{ "--lib": `${sizes.lib}px`, "--insp": `${sizes.insp}px`, "--tl": `${sizes.tl}px` } as CSSProperties}>
+    <main className="ed" ref={shell} style={{ "--lib": `${sizes.lib}px`, "--insp": `${sizes.insp}px`, "--tl": `${sizes.tl}px` } as CSSProperties}>
       <div className="ed-split v s1" role="separator" aria-orientation="vertical" aria-label="Resize the side panel" onPointerDown={startResize("lib", 1, "x")} onDoubleClick={() => setSizes((s) => ({ ...s, lib: DEFAULT_SIZES.lib }))} />
       <div className="ed-split v s2" role="separator" aria-orientation="vertical" aria-label="Resize the inspector" onPointerDown={startResize("insp", -1, "x")} onDoubleClick={() => setSizes((s) => ({ ...s, insp: DEFAULT_SIZES.insp }))} />
       <div className="ed-split h s3" role="separator" aria-orientation="horizontal" aria-label="Resize the timeline" onPointerDown={startResize("tl", -1, "y")} onDoubleClick={() => setSizes((s) => ({ ...s, tl: DEFAULT_SIZES.tl }))} />
@@ -644,7 +659,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
           {stageW > 0 && (
             <div className="take-stage" style={{ width: stageW, aspectRatio: String(ar), containerType: "inline-size", ...(fcss ? fcss.stage : {}) }}>
               <div className="take-picture" style={fcss ? { position: "absolute", ...fcss.picture } : undefined}>
-                <video ref={(el) => void ((video.current = el), (picture.current = el))} src={info.video ? platform.mediaUrl(info.video) : undefined} onEnded={() => setPlaying(false)} onClick={toggle} preload="auto" />
+                <video ref={(el) => void ((video.current = el), (picture.current = el))} src={info.video ? platform.mediaUrl(info.video) : undefined} onLoadedMetadata={(e) => setVideoLen(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : null)} onEnded={() => setPlaying(false)} onClick={toggle} preload="auto" />
                 {ringNow.map((r) => (
                   <i key={r.k} className="take-ring" style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%` }} />
                 ))}
