@@ -1,4 +1,4 @@
-; ReeliF Capture installer customisation (tauri.conf.json > bundle > windows > nsis > installerHooks).
+; Capturely installer customisation (tauri.conf.json > bundle > windows > nsis > installerHooks).
 ; Tauri includes this file right after the installer's own !includes, before any page is declared,
 ; so page texts defined here apply to its welcome/finish pages. Strings live in lang/*.nsh.
 

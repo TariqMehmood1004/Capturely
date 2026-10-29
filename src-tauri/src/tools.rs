@@ -16,11 +16,11 @@ fn search_path(file: &str) -> Option<PathBuf> {
 /// What to do when FFmpeg is missing, for this system.
 fn missing(name: &str) -> String {
     if cfg!(target_os = "macos") {
-        format!("{name} was not found. Install it with Homebrew (brew install ffmpeg), then open ReeliF Capture again.")
+        format!("{name} was not found. Install it with Homebrew (brew install ffmpeg), then open Capturely again.")
     } else if cfg!(target_os = "linux") {
-        format!("{name} was not found. Install it (sudo apt install ffmpeg), then open ReeliF Capture again.")
+        format!("{name} was not found. Install it (sudo apt install ffmpeg), then open Capturely again.")
     } else {
-        format!("{name} was not found. Reinstall ReeliF Capture.")
+        format!("{name} was not found. Reinstall Capturely.")
     }
 }
 

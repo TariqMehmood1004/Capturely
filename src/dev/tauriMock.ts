@@ -32,7 +32,7 @@ const takes: TakeInfo[] = [
   ["Onboarding flow", 245, 310],
   ["Release notes demo", 58, 71],
 ].map(([name, d, mb], i) => ({
-  path: `C:/Users/demo/Videos/ReeliF Capture/${name}`,
+  path: `C:/Users/demo/Videos/Capturely/${name}`,
   name: name as string,
   data: data(d as number),
   video: "/node_modules/.preview/sample.mp4",
@@ -52,7 +52,7 @@ const replies: Record<string, (args: Record<string, unknown>) => unknown> = {
       { index: 1, name: "Screen 2", x: 1920, y: 0, width: 2560, height: 1440, primary: false },
     ],
     windows: [
-      { id: "1", title: "ReeliF Capture - Visual Studio Code" },
+      { id: "1", title: "Capturely - Visual Studio Code" },
       { id: "2", title: "Swagger UI - Google Chrome" },
       { id: "3", title: "Calculator" },
     ],

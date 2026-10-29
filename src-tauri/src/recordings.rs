@@ -1,4 +1,4 @@
-//! The library and the files of a take. Every recording is a folder in Videos\ReeliF Capture:
+//! The library and the files of a take. Every recording is a folder in Videos\Capturely:
 //! `recording.mp4` (screen and sound), `camera.mp4` (optional), `take.json` (clicks, pointer path,
 //! markers, settings) and the exports. Raw browser recordings (microphone, camera) stream into the
 //! app's private folder while recording and are converted or mixed when the take finishes.
@@ -12,10 +12,10 @@ use crate::error::{AppError, AppResult};
 use crate::jobs::{emit_progress, new_command, run_process, summarize_stderr, JobGuard, JobRegistry};
 use crate::tools;
 
-/// Videos\ReeliF Capture (the app's data folder when there is no Videos folder).
+/// Videos\Capturely (the app's data folder when there is no Videos folder).
 pub fn library_dir(app: &AppHandle) -> AppResult<PathBuf> {
     let base = app.path().video_dir().or_else(|_| app.path().app_local_data_dir()).map_err(|e| AppError::Invalid(e.to_string()))?;
-    let dir = base.join("ReeliF Capture");
+    let dir = base.join("Capturely");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }
@@ -33,7 +33,7 @@ pub fn take_dir(app: &AppHandle, path: &str) -> AppResult<PathBuf> {
     if p.parent() == Some(library_dir(app)?.as_path()) && p.is_dir() {
         Ok(p)
     } else {
-        Err(AppError::Invalid("Not a recording of ReeliF Capture.".into()))
+        Err(AppError::Invalid("Not a recording of Capturely.".into()))
     }
 }
 

@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>ReeliF Capture records your voice with the screen when you turn the microphone on.</string>
+  <string>Capturely records your voice with the screen when you turn the microphone on.</string>
   <key>NSCameraUsageDescription</key>
-  <string>ReeliF Capture adds your camera as a bubble to the recording when you turn the camera on.</string>
+  <string>Capturely adds your camera as a bubble to the recording when you turn the camera on.</string>
 </dict>
 </plist>

@@ -65,7 +65,7 @@ $fTag   = New-Object System.Drawing.Font 'Segoe UI', (9.5 * $S), ([System.Drawin
 $fPill  = New-Object System.Drawing.Font 'Segoe UI Semibold', (8.5 * $S), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
 $fFoot  = New-Object System.Drawing.Font 'Segoe UI', (8.5 * $S), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
 
-Draw-Centered $g 'ReeliF Capture' $fTitle $white ($W * $S) (128 * $S)
+Draw-Centered $g 'Capturely' $fTitle $white ($W * $S) (128 * $S)
 Draw-Centered $g 'Record. Click. Zoom.' $fTag $muted ($W * $S) (152 * $S)
 
 # A flat pill (no outline) with the red recording dot.
@@ -102,7 +102,7 @@ $ink   = New-Object System.Drawing.SolidBrush (Hex '#18181b')
 $sub   = New-Object System.Drawing.SolidBrush (Hex '#6b6b78')
 $fName = New-Object System.Drawing.Font 'Segoe UI Semibold', (13 * $S), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
 $fBy   = New-Object System.Drawing.Font 'Segoe UI', (8.5 * $S), ([System.Drawing.FontStyle]::Regular), ([System.Drawing.GraphicsUnit]::Pixel)
-$g.DrawString('ReeliF Capture', $fName, $ink, (48 * $S), (12 * $S))
+$g.DrawString('Capturely', $fName, $ink, (48 * $S), (12 * $S))
 $g.DrawString('by SyntaxilitY', $fBy, $sub, (49 * $S), (30 * $S))
 $g.Dispose()
 Save-Bmp $bmp $W $H (Join-Path $icons 'nsis-header.bmp')

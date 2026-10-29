@@ -1,4 +1,4 @@
-//! ReeliF Capture (by SyntaxilitY): a screen recorder with smooth click zooms. Screen, sound and
+//! Capturely (by SyntaxilitY): a screen recorder with smooth click zooms. Screen, sound and
 //! clicks are captured natively (capture.rs, clicks.rs); FFmpeg makes and exports the videos.
 mod capture;
 mod clicks;
@@ -93,5 +93,5 @@ pub fn run() {
             shell::editor_minimize,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running ReeliF Capture");
+        .expect("error while running Capturely");
 }

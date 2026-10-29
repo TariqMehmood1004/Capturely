@@ -434,7 +434,7 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
         _ => win::window_rect(spec.window.as_deref().unwrap_or("")).ok_or_else(|| AppError::Invalid("That window is no longer open.".into()))?,
     };
     #[cfg(target_os = "macos")]
-    let device = Some(crate::sys::macos::screen_device(&tools::ffmpeg()?, spec.monitor.unwrap_or(0)).ok_or_else(|| AppError::Invalid("macOS did not offer this screen for recording. Allow ReeliF Capture in System Settings > Privacy & Security > Screen Recording, then open it again.".into()))?);
+    let device = Some(crate::sys::macos::screen_device(&tools::ffmpeg()?, spec.monitor.unwrap_or(0)).ok_or_else(|| AppError::Invalid("macOS did not offer this screen for recording. Allow Capturely in System Settings > Privacy & Security > Screen Recording, then open it again.".into()))?);
     #[cfg(not(target_os = "macos"))]
     let device = None;
     let dir = crate::recordings::raw_dir(&app)?.join(format!("capture-{}", uuid::Uuid::new_v4()));
@@ -538,7 +538,7 @@ async fn probe_duration(file: &std::path::Path) -> Option<f64> {
 /// its frame counts each second: `dup=` counts repeated frames, a sign the computer fell behind).
 fn write_log(take: &std::path::Path, spec: &CaptureSpec, notes: &[String], segments: &[PathBuf], finish: &str) {
     let mut body = format!(
-        "ReeliF Capture {}\nsource: {}  fps: {}  encoder: {}  quality: {}\n\n",
+        "Capturely {}\nsource: {}  fps: {}  encoder: {}  quality: {}\n\n",
         env!("CARGO_PKG_VERSION"),
         spec.kind,
         spec.fps,
@@ -685,7 +685,7 @@ mod win {
         if IsWindowVisible(hwnd) == 0 || IsIconic(hwnd) != 0 {
             return 1;
         }
-        // Not ReeliF Capture's own windows (they are left out of captures, so Windows refuses
+        // Not Capturely's own windows (they are left out of captures, so Windows refuses
         // to record them), nor windows Windows keeps hidden ("cloaked": other desktops, apps
         // suspended in the background).
         let mut pid = 0u32;

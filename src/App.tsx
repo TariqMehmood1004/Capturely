@@ -1,6 +1,6 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import logo from "./assets/app-icon.svg";
+import logo from "./assets/capturely-logo.png";
 import { platform } from "./platform";
 import { FilmIcon, FolderOpenIcon } from "./ui/icons";
 import { LibraryPage } from "./ui/LibraryPage";
@@ -59,7 +59,7 @@ export default function App() {
         <div className="topbar-left" data-tauri-drag-region>
           <img className="brand-logo" src={logo} alt="" width={20} height={20} data-tauri-drag-region />
           <span className="brand-name" data-tauri-drag-region>
-            ReeliF <span className="brand-sub">Capture</span>
+            Capturely
           </span>
           <nav className="topnav" ref={nav} aria-label="Pages">
             <span className="topnav-pill" ref={pill} aria-hidden />

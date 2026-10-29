@@ -113,7 +113,7 @@ pub async fn overlay_open(app: AppHandle, x: i32, y: i32, width: u32, height: u3
         let _ = w.destroy();
     }
     let w = WebviewWindowBuilder::new(&app, OVERLAY, WebviewUrl::App("index.html".into()))
-        .title("ReeliF overlay")
+        .title("Capturely overlay")
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -198,7 +198,7 @@ pub async fn editor_open(app: AppHandle, take: Option<String>) -> AppResult<()> 
     }
     *PENDING.lock().unwrap_or_else(|p| p.into_inner()) = take;
     WebviewWindowBuilder::new(&app, EDITOR, WebviewUrl::App("index.html".into()))
-        .title("ReeliF Capture")
+        .title("Capturely")
         .decorations(false)
         .min_inner_size(900.0, 640.0)
         .inner_size(1280.0, 800.0)

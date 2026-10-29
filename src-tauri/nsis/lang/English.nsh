@@ -26,9 +26,9 @@ LangString webview2InstallError ${LANG_ENGLISH} "Error: Installing WebView2 fail
 LangString webview2InstallSuccess ${LANG_ENGLISH} "WebView2 installed successfully"
 LangString deleteAppData ${LANG_ENGLISH} "Delete the application data"
 
-; ReeliF Capture additions (used by src-tauri/nsis/hooks.nsh)
+; Capturely additions (used by src-tauri/nsis/hooks.nsh)
 LangString reelifWelcomeTitle ${LANG_ENGLISH} "Welcome to ${PRODUCTNAME}"
-LangString reelifWelcomeText ${LANG_ENGLISH} "Record. Click. Zoom.$\r$\n$\r$\nThis wizard installs ${PRODUCTNAME} ${VERSION} by ${MANUFACTURER}: a screen recorder that follows your clicks with smooth zooms, with a camera bubble, background frames and quick cuts before you export.$\r$\n$\r$\nRecordings stay on this computer, in your Videos\ReeliF Capture folder. Nothing is uploaded.$\r$\n$\r$\n$_CLICK"
+LangString reelifWelcomeText ${LANG_ENGLISH} "Record. Click. Zoom.$\r$\n$\r$\nThis wizard installs ${PRODUCTNAME} ${VERSION} by ${MANUFACTURER}: a screen recorder that follows your clicks with smooth zooms, with a camera bubble, background frames and quick cuts before you export.$\r$\n$\r$\nRecordings stay on this computer, in your Videos\Capturely folder. Nothing is uploaded.$\r$\n$\r$\n$_CLICK"
 LangString reelifFinishTitle ${LANG_ENGLISH} "${PRODUCTNAME} is ready"
 LangString reelifFinishText ${LANG_ENGLISH} "${PRODUCTNAME} has been installed on this computer.$\r$\n$\r$\nIt opens as a small capture bar at the bottom of the screen. Press the red button to record; when you stop, the editor opens on your library.$\r$\n$\r$\nClick Finish to close this wizard."
 LangString reelifStoppingRunning ${LANG_ENGLISH} "Closing running ${PRODUCTNAME} processes so files can be updated..."

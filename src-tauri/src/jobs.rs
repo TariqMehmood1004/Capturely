@@ -1,5 +1,5 @@
 //! Cancellable subprocess jobs with progress events.
-#![allow(dead_code)] // Job pausing and cancel-all come with the shared job code; ReeliF Capture does not use them yet.
+#![allow(dead_code)] // Job pausing and cancel-all come with the shared job code; Capturely does not use them yet.
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

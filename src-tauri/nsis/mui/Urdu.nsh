@@ -1,5 +1,5 @@
 ﻿;Language: Urdu (1056)
-;Modern UI strings for the ReeliF Capture installer. NSIS does not ship Urdu; loaded by src-tauri/nsis/hooks.nsh.
+;Modern UI strings for the Capturely installer. NSIS does not ship Urdu; loaded by src-tauri/nsis/hooks.nsh.
 
 !insertmacro LANGFILE "Urdu" = "اردو" "Urdu"
 

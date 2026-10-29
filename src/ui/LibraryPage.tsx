@@ -9,7 +9,7 @@ const size = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.ma
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 /**
- * Every recording in Videos\ReeliF Capture, newest first; `fresh` (just recorded) is marked.
+ * Every recording in Videos\Capturely, newest first; `fresh` (just recorded) is marked.
  * Each card has a delete button (press twice: it asks first). "Select" picks several, or all, to
  * delete together.
  */
@@ -146,7 +146,7 @@ export function LibraryPage({ fresh, onOpen, onRecord }: { fresh?: string | null
     <div className="page">
       <div className="lib-head">
         <h2>Library</h2>
-        <span className="muted-note">{takes ? `${plural(takes.length, "recording")} in Videos\\ReeliF Capture` : ""}</span>
+        <span className="muted-note">{takes ? `${plural(takes.length, "recording")} in Videos\\Capturely` : ""}</span>
         <span className="grow" />
         {!!takes?.length && (
           <div className="lib-tools glide">

@@ -77,7 +77,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-          releaseName: "ReeliF Capture ${{ github.ref_name }}"
+          releaseName: "Capturely ${{ github.ref_name }}"
           releaseBody: "Windows: the .exe. Ubuntu: the .deb (or the .AppImage). macOS: the .dmg (needs FFmpeg: brew install ffmpeg)."
           releaseDraft: true
           args: ${{ matrix.args }}

@@ -977,7 +977,7 @@ export default function Bar() {
             <button className="cb-icon" onClick={() => void platform.window.minimize()} aria-label="Minimize" title="Minimize">
               <MinusIcon aria-hidden />
             </button>
-            <button className="cb-icon" onClick={() => void platform.quit()} aria-label="Quit ReeliF Capture" title="Quit ReeliF Capture">
+            <button className="cb-icon" onClick={() => void platform.quit()} aria-label="Quit Capturely" title="Quit Capturely">
               <XMarkIcon aria-hidden />
             </button>
           </>

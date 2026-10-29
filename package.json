@@ -1,8 +1,8 @@
 {
-  "name": "reelif-capture",
+  "name": "capturely",
   "private": true,
   "version": "0.1.4",
-  "description": "ReeliF Capture by SyntaxilitY - a screen recorder with smooth click zooms.",
+  "description": "Capturely by SyntaxilitY - a screen recorder with smooth click zooms.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -10,7 +10,9 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev": "npm run tauri dev",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/make-nsis-art.ps1 && tauri build --bundles nsis"
   },
   "dependencies": {
     "@heroicons/react": "2.2.0",

@@ -26,9 +26,9 @@ LangString webview2InstallError ${LANG_URDU} "خرابی: WebView2 کی انسٹ
 LangString webview2InstallSuccess ${LANG_URDU} "WebView2 کامیابی سے انسٹال ہو گیا"
 LangString deleteAppData ${LANG_URDU} "ایپلیکیشن کا ڈیٹا حذف کریں"
 
-; ReeliF Capture additions (used by src-tauri/nsis/hooks.nsh)
+; Capturely additions (used by src-tauri/nsis/hooks.nsh)
 LangString reelifWelcomeTitle ${LANG_URDU} "${PRODUCTNAME} میں خوش آمدید"
-LangString reelifWelcomeText ${LANG_URDU} "ریکارڈ کریں۔ کلک کریں۔ زوم۔$\r$\n$\r$\nیہ وزرڈ ${MANUFACTURER} کا ${PRODUCTNAME} ${VERSION} انسٹال کرے گا: ایک اسکرین ریکارڈر جو آپ کے کلکس پر نرم زوم کرتا ہے، کیمرہ ببل، بیک گراؤنڈ فریم اور ایکسپورٹ سے پہلے فوری کٹ کے ساتھ۔$\r$\n$\r$\nریکارڈنگز اسی کمپیوٹر پر آپ کے Videos\ReeliF Capture فولڈر میں رہتی ہیں۔ کچھ بھی اپ لوڈ نہیں ہوتا۔$\r$\n$\r$\n$_CLICK"
+LangString reelifWelcomeText ${LANG_URDU} "ریکارڈ کریں۔ کلک کریں۔ زوم۔$\r$\n$\r$\nیہ وزرڈ ${MANUFACTURER} کا ${PRODUCTNAME} ${VERSION} انسٹال کرے گا: ایک اسکرین ریکارڈر جو آپ کے کلکس پر نرم زوم کرتا ہے، کیمرہ ببل، بیک گراؤنڈ فریم اور ایکسپورٹ سے پہلے فوری کٹ کے ساتھ۔$\r$\n$\r$\nریکارڈنگز اسی کمپیوٹر پر آپ کے Videos\Capturely فولڈر میں رہتی ہیں۔ کچھ بھی اپ لوڈ نہیں ہوتا۔$\r$\n$\r$\n$_CLICK"
 LangString reelifFinishTitle ${LANG_URDU} "${PRODUCTNAME} تیار ہے"
 LangString reelifFinishText ${LANG_URDU} "${PRODUCTNAME} اس کمپیوٹر پر انسٹال ہو گیا ہے۔$\r$\n$\r$\nیہ اسکرین کے نیچے ایک چھوٹی کیپچر بار کی صورت میں کھلتا ہے۔ ریکارڈ کرنے کے لیے سرخ بٹن دبائیں؛ روکنے پر ایڈیٹر آپ کی لائبریری پر کھلتا ہے۔$\r$\n$\r$\nوزرڈ بند کرنے کے لیے $\"ختم کریں$\" پر کلک کریں۔"
 LangString reelifStoppingRunning ${LANG_URDU} "فائلیں اپ ڈیٹ کرنے کے لیے ${PRODUCTNAME} کے چلتے ہوئے پروسیس بند کیے جا رہے ہیں..."

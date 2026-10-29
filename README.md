@@ -1,13 +1,13 @@
-# ReeliF Capture
+# Capturely
 
 Screen recorder with smooth click zooms, by **SyntaxilitY**.
 
 ## Install
 
-**Windows:** [`apps/windows/ReeliF Capture_0.1.4_x64-setup.exe`](apps/windows/ReeliF%20Capture_0.1.4_x64-setup.exe). Run it and
+**Windows:** [`apps/windows/Capturely_0.1.4_x64-setup.exe`](apps/windows/ReeliF%20Capture_0.1.4_x64-setup.exe). Run it and
 follow the steps.
 
-Recordings are saved in your Videos folder, in `ReeliF Capture`.
+Recordings are saved in your Videos folder, in `Capturely`.
 
 **Remaining platforms:** Mac and Ubuntu are coming soon.
 
