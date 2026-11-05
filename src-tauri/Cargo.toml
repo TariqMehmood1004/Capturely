@@ -1,6 +1,6 @@
 [package]
 name = "reelif-capture"
-version = "0.1.4"
+version = "1.5.8"
 description = "Capturely by SyntaxilitY - a screen recorder with smooth click zooms"
 authors = ["SyntaxilitY"]
 license = "MIT"

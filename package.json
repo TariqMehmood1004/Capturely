@@ -1,7 +1,7 @@
 {
   "name": "capturely",
   "private": true,
-  "version": "0.1.4",
+  "version": "1.5.8",
   "description": "Capturely by SyntaxilitY - a screen recorder with smooth click zooms.",
   "license": "MIT",
   "type": "module",
