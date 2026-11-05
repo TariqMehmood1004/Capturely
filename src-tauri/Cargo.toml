@@ -15,11 +15,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-log = "2"
 # Start, stop, pause and marker keys from any app. MIT/Apache-2.0.
 tauri-plugin-global-shortcut = "2"
+# One Capturely at a time: opening it again shows the running one (which owns the keys). MIT/Apache-2.0.
+tauri-plugin-single-instance = "2"
+# Native open and save dialogs (pictures, sounds, videos, project files), shown from Rust so file
+# paths never come from the page. MIT/Apache-2.0.
+tauri-plugin-dialog = "2"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

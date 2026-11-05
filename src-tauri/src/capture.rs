@@ -59,7 +59,8 @@ pub struct CaptureSpec {
     pub fps: u32,
     pub cursor: bool,
     pub system_audio: bool,
-    /// "cpu" (x264), or a graphics card's encoder: "nvidia" (NVENC), "intel" (Quick Sync), "amd" (AMF).
+    /// "auto" (the first graphics card encoder that works here, else the CPU), "cpu" (x264), or a
+    /// graphics card's encoder: "nvidia" (NVENC), "intel" (Quick Sync), "amd" (AMF).
     #[serde(default = "default_encoder")]
     pub encoder: String,
     /// "standard", "high" or "best".
@@ -71,7 +72,7 @@ pub struct CaptureSpec {
 }
 
 fn default_encoder() -> String {
-    "cpu".into()
+    "auto".into()
 }
 fn default_quality() -> String {
     "high".into()
@@ -80,11 +81,27 @@ fn default_true() -> bool {
     true
 }
 
-/// The graphics card encoders this computer can use (Windows), checked once.
+/// The graphics card encoders this computer can use (Windows). Each check starts the card's
+/// encoder, which takes a while and loads the system on slower computers, so the answer is kept
+/// on disk (encoders.json in the app's data folder) for the same FFmpeg, and checked again after
+/// two weeks (new drivers or a new card).
 #[tauri::command]
-pub async fn capture_encoders() -> Vec<String> {
+pub async fn capture_encoders(app: AppHandle) -> Vec<String> {
     static FOUND: Mutex<Option<Vec<String>>> = Mutex::new(None);
     if let Some(found) = FOUND.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return found;
+    }
+    // Which FFmpeg answered: a new one (an update) is asked again.
+    let key = tools::ffmpeg()
+        .ok()
+        .and_then(|p| std::fs::metadata(&p).ok().map(|m| format!("{}:{}", p.display(), m.len())))
+        .unwrap_or_default();
+    let file = app.path().app_local_data_dir().ok().map(|d| d.join("encoders.json"));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let saved = file.as_ref().and_then(|f| std::fs::read_to_string(f).ok()).and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
+    if let Some(v) = saved.filter(|v| v["key"] == key.as_str() && now.saturating_sub(v["at"].as_u64().unwrap_or(0)) < 14 * 86_400) {
+        let found: Vec<String> = v["found"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        *FOUND.lock().unwrap_or_else(|e| e.into_inner()) = Some(found.clone());
         return found;
     }
     let mut found = Vec::new();
@@ -100,7 +117,26 @@ pub async fn capture_encoders() -> Vec<String> {
         }
     }
     *FOUND.lock().unwrap_or_else(|e| e.into_inner()) = Some(found.clone());
+    if let Some(f) = file {
+        if let Some(dir) = f.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(f, serde_json::json!({ "key": key, "at": now, "found": found }).to_string());
+    }
     found
+}
+
+/// Whether the screen capture is still running. False when FFmpeg ended on its own while
+/// recording (the recorded window was closed, the screen was unplugged); the bar then stops and
+/// keeps what was recorded. A paused recording counts as running.
+#[tauri::command]
+pub fn capture_alive() -> bool {
+    let mut guard = lock();
+    let Some(run) = guard.as_mut() else { return false };
+    match run.ffmpeg.as_mut() {
+        Some(child) => !matches!(child.try_wait(), Ok(Some(_))),
+        None => true,
+    }
 }
 
 /// What was started: the recorded area, and how long ago the picture started (seconds), so the
@@ -109,6 +145,8 @@ pub async fn capture_encoders() -> Vec<String> {
 pub struct CaptureStarted {
     pub rect: CaptureRect,
     pub lead: f64,
+    /// The encoder actually recording ("cpu", "nvidia", "intel", "amd").
+    pub encoder: String,
 }
 
 /// The finished recording and its real length in seconds (from FFprobe).
@@ -147,6 +185,8 @@ struct Running {
     wav_skip: f64,
     /// What happened, for capture.log (each segment's command, encoder fallbacks).
     notes: Vec<String>,
+    /// Encoders to try, in order, when the chosen one does not start (the CPU last).
+    fallbacks: Vec<String>,
 }
 
 static CAPTURE: Mutex<Option<Running>> = Mutex::new(None);
@@ -300,17 +340,34 @@ fn ffmpeg_args(run: &Running, out: &std::path::Path) -> AppResult<Vec<String>> {
     Ok(a)
 }
 
-/// Start one video segment; a graphics card encoder that fails at once is replaced by the CPU's.
+/// Start one video segment; a graphics card encoder that fails at once is replaced by the next
+/// one to try (the CPU's last). The encoder that started is kept for the following segments.
 fn spawn_segment(run: &mut Running) -> AppResult<()> {
-    match start_segment(run) {
-        Err(e) if run.spec.encoder != "cpu" => {
-            log::warn!("{} encoder failed, using the CPU: {e}", run.spec.encoder);
-            run.notes.push(format!("The {} encoder did not start ({e}); recording with the CPU instead.", run.spec.encoder));
-            run.spec.encoder = "cpu".into();
-            start_segment(run)
+    loop {
+        match start_segment(run) {
+            Err(e) if !run.fallbacks.is_empty() => {
+                let next = run.fallbacks.remove(0);
+                log::warn!("{} encoder failed, trying {next}: {e}", run.spec.encoder);
+                run.notes.push(format!("The {} encoder did not start ({e}); trying {next}.", run.spec.encoder));
+                run.spec.encoder = next;
+            }
+            r => return r,
         }
-        r => r,
     }
+}
+
+/// The encoder to start with and those to try after it. "auto" takes the graphics card
+/// encoders that passed `capture_encoders` (the screen may be on another card than the first
+/// one found, so each is tried); a chosen card falls back to the CPU only.
+fn encoder_plan(chosen: &str, working: &[String]) -> (String, Vec<String>) {
+    let mut order: Vec<String> = match chosen {
+        "auto" => working.to_vec(),
+        "cpu" => Vec::new(),
+        other => vec![other.to_string()],
+    };
+    order.push("cpu".into());
+    let first = order.remove(0);
+    (first, order)
 }
 
 /// Start one video segment (stdin kept open: "q" ends it cleanly).
@@ -412,6 +469,13 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
     if !cfg!(windows) {
         spec.encoder = "cpu".into();
     }
+    let working = if spec.encoder == "auto" { capture_encoders(app.clone()).await } else { Vec::new() };
+    let (encoder, fallbacks) = encoder_plan(&spec.encoder, &working);
+    let chosen = std::mem::replace(&mut spec.encoder, encoder);
+    // One start at a time: a second start (a double press) waits, then ends this one's capture
+    // in `cancel_now`, so no FFmpeg is left recording without an owner.
+    static STARTING: Mutex<()> = Mutex::new(());
+    let _one = STARTING.lock().unwrap_or_else(|e| e.into_inner());
     log::info!("capture start: {} (screen {:?}, window {:?}, {} fps, {} encoder, {} quality)", spec.kind, spec.monitor, spec.window, spec.fps, spec.encoder, spec.quality);
     if let Some(why) = crate::sys::info().blocked {
         return Err(AppError::Invalid(why));
@@ -440,7 +504,8 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
     let dir = crate::recordings::raw_dir(&app)?.join(format!("capture-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir)?;
     let seg_audio = cfg!(target_os = "linux") && spec.system_audio;
-    let mut run = Running { spec: spec.clone(), rect, device, seg_audio, dir, segments: Vec::new(), ffmpeg: None, started: None, audio: None, wav_skip: 0.0, notes: Vec::new() };
+    let notes = if chosen == "auto" { vec![format!("encoder: auto; graphics card encoders that work here: {working:?}")] } else { Vec::new() };
+    let mut run = Running { spec: spec.clone(), rect, device, seg_audio, dir, segments: Vec::new(), ffmpeg: None, started: None, audio: None, wav_skip: 0.0, notes, fallbacks };
     // System sound starts first (it takes a moment); what it records before the picture starts
     // is skipped when the sound is mixed.
     let audio_at = Instant::now();
@@ -470,8 +535,17 @@ pub async fn capture_start(app: AppHandle, spec: CaptureSpec) -> AppResult<Captu
     let started = run.started.unwrap_or_else(Instant::now);
     run.wav_skip = started.duration_since(audio_at).as_secs_f64();
     let lead = started.elapsed().as_secs_f64();
-    *lock() = Some(run);
-    Ok(CaptureStarted { rect, lead })
+    let encoder = run.spec.encoder.clone();
+    log::info!("capture running with the {encoder} encoder");
+    // Anything still stored here was started by an overlapping call: end it, do not orphan it.
+    if let Some(mut old) = lock().replace(run) {
+        end_segment(&mut old);
+        if let Some(a) = old.audio.take() {
+            a.stop();
+        }
+        let _ = std::fs::remove_dir_all(&old.dir);
+    }
+    Ok(CaptureStarted { rect, lead, encoder })
 }
 
 /// Pause (end the segment, stop writing sound) or resume (a new segment).
@@ -509,14 +583,23 @@ fn cancel_now() {
 }
 
 /// One sound of the recording as AAC (`skip`: seconds before the picture started).
-async fn sound_track(src: &std::path::Path, skip: f64, length: f64, out: &std::path::Path) -> AppResult<()> {
+/// The microphone made centred: devices that send their voice on one side of a stereo pair, or
+/// on several channels (arrays, audio interfaces), would otherwise sound off to one side. It is
+/// mixed down to one channel, then sent to both.
+const MIC_CENTRE: &str = "aformat=channel_layouts=mono,aformat=channel_layouts=stereo";
+
+async fn sound_track(src: &std::path::Path, skip: f64, length: f64, out: &std::path::Path, mic: bool) -> AppResult<()> {
     let partial = out.with_extension("partial.m4a");
     let mut cmd = new_command(&tools::ffmpeg()?);
     cmd.args(["-hide_banner", "-nostdin", "-v", "error", "-y"]);
     if skip > 0.005 && skip < 10.0 {
         cmd.arg("-ss").arg(format!("{skip:.3}"));
     }
-    cmd.arg("-i").arg(src).args(["-vn", "-t", &format!("{length:.3}"), "-c:a", "aac", "-b:a", "160k"]).arg(&partial);
+    cmd.arg("-i").arg(src).args(["-vn", "-t", &format!("{length:.3}")]);
+    if mic {
+        cmd.args(["-af", MIC_CENTRE]);
+    }
+    cmd.args(["-c:a", "aac", "-b:a", "160k"]).arg(&partial);
     let o = cmd.output().await?;
     if !o.status.success() {
         let _ = std::fs::remove_file(&partial);
@@ -618,8 +701,15 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
     let sounds = labels.len();
     cmd.args(["-map", "0:v", "-c:v", "copy"]);
     if sounds > 0 {
+        // The microphone is the last sound (when there is one): centred first.
+        let mut prep = String::new();
+        if mic.is_some() {
+            let last = labels.pop().unwrap_or_default();
+            prep = format!("{last}{MIC_CENTRE}[micc];");
+            labels.push("[micc]".into());
+        }
         let ins: String = labels.concat();
-        let mix = if sounds > 1 { format!("{ins}amix=inputs={sounds}:duration=longest:normalize=0,apad[a]") } else { format!("{ins}apad[a]") };
+        let mix = if sounds > 1 { format!("{prep}{ins}amix=inputs={sounds}:duration=longest:normalize=0,apad[a]") } else { format!("{prep}{ins}apad[a]") };
         cmd.args(["-filter_complex", &mix, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-shortest"]);
     }
     cmd.args(["-movflags", "+faststart", "-progress", "pipe:1", "-nostats"]).arg(&partial);
@@ -652,7 +742,7 @@ pub async fn capture_finish(app: AppHandle, registry: State<'_, JobRegistry>, jo
         let length = probe_duration(&out).await.unwrap_or(duration);
         for (name, src, skip) in [("system", wav.as_ref(), wav_skip), ("mic", mic.as_ref(), mic_skip)] {
             if let Some(src) = src {
-                if let Err(e) = sound_track(src, skip, length, &take.join(format!("{name}.m4a"))).await {
+                if let Err(e) = sound_track(src, skip, length, &take.join(format!("{name}.m4a")), name == "mic").await {
                     log::warn!("{name} sound track: {e}");
                 }
             }
@@ -910,7 +1000,16 @@ mod audio {
 
 #[cfg(test)]
 mod tests {
-    use super::{fit_area, CaptureRect};
+    use super::{encoder_plan, fit_area, CaptureRect};
+
+    #[test]
+    fn auto_tries_each_working_card_then_the_cpu() {
+        let working = vec!["nvidia".to_string(), "intel".to_string()];
+        assert_eq!(encoder_plan("auto", &working), ("nvidia".into(), vec!["intel".into(), "cpu".into()]));
+        assert_eq!(encoder_plan("auto", &[]), ("cpu".into(), vec![]));
+        assert_eq!(encoder_plan("cpu", &working), ("cpu".into(), vec![]));
+        assert_eq!(encoder_plan("amd", &working), ("amd".into(), vec!["cpu".into()]));
+    }
 
     #[test]
     fn area_stays_on_screen_and_even() {

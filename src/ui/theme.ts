@@ -32,8 +32,9 @@ const shown = (): Theme => {
   return v === "dark" || v === "light" ? v : systemTheme();
 };
 
-/** Set the theme on this window; `origin` (viewport point) animates it from there. */
-export function applyTheme(t: Theme | null, origin?: { x: number; y: number }) {
+/** Set the theme on this window; `origin` (viewport point) reveals it from there, "fade"
+ *  cross-fades the colours (a change made in another window). */
+export function applyTheme(t: Theme | null, origin?: { x: number; y: number } | "fade") {
   const root = document.documentElement;
   const set = () => {
     if (t) root.dataset.theme = t;
@@ -41,7 +42,7 @@ export function applyTheme(t: Theme | null, origin?: { x: number; y: number }) {
   };
   const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready: Promise<void> } };
   if (!origin || reducedMotion() || (t ?? systemTheme()) === shown()) return set();
-  if (!doc.startViewTransition) {
+  if (origin === "fade" || !doc.startViewTransition || document.visibilityState === "hidden") {
     root.classList.add("theme-fading");
     set();
     window.setTimeout(() => root.classList.remove("theme-fading"), 400);

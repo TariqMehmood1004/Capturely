@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { buildExportGraph } from "./exportGraph";
+import { DEFAULT_CURSOR } from "./cursor";
 import { DEFAULT_FRAME } from "./frame";
+import { DEFAULT_CAMERA } from "./style";
 import { segments } from "./timeline";
 import { clickRegions, regionKeys } from "./zoom";
 
@@ -14,7 +16,7 @@ describe("export graph", () => {
   });
 
   it("chains zoom, rings, frame and camera in that order", () => {
-    const g = buildExportGraph({ width: 1920, height: 1080, fps: 30, keys, rings: [{ t: 2, x: 0.1, y: 0.2 }], frame: DEFAULT_FRAME, camera: { spot: "bottom-right", size: 0.2 } });
+    const g = buildExportGraph({ width: 1920, height: 1080, fps: 30, box: { x: 116, y: 64, w: 1688, h: 952, radius: 24 }, keys, rings: [{ t: 2, x: 0.1, y: 0.2 }], frame: DEFAULT_FRAME, camera: { look: { ...DEFAULT_CAMERA, size: 0.2, shadow: 0 } } });
     const at = (s: string) => g.indexOf(s);
     expect(at("[zoomed]")).toBeGreaterThan(0);
     expect(at("[rg0]")).toBeGreaterThan(at("[zoomed]"));
@@ -49,13 +51,13 @@ describe("export graph", () => {
       keys,
       rings: [],
       frame: null,
-      camera: { spot: "bottom-right", size: 0.2, input: 1 },
+      camera: { look: { ...DEFAULT_CAMERA, size: 0.2 }, input: 1 },
       segments: segments(10, [], [{ a: 5, b: 9, rate: 4 }]),
       sound: [
         { input: 3, volume: 0.5, clean: false },
         { input: 4, volume: 1.4, clean: true },
       ],
-      cursor: { track: [{ x: 0.5, y: 0.5 }, { x: 0.6, y: 0.5 }], look: { on: true, size: 1, smooth: 0 }, input: 2 },
+      cursor: { poses: [{ x: 0.5, y: 0.5, s: 1, a: 0 }, { x: 0.6, y: 0.5, s: 1, a: 0 }], look: { ...DEFAULT_CURSOR, size: 1, smooth: 0 }, input: 2 },
       marks: [
         { id: "b", kind: "blur", a: 1, b: 3, x: 0.1, y: 0.1, w: 0.2, h: 0.1 },
         { id: "t", kind: "text", a: 0, b: 2, x: 0.1, y: 0.8, w: 0, h: 0, text: "Step 1: open it", size: 0.05 },

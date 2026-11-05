@@ -48,7 +48,7 @@ pub fn raw_file(app: &AppHandle, path: &str) -> AppResult<PathBuf> {
     }
 }
 
-fn allow(app: &AppHandle, path: &Path) {
+pub fn allow(app: &AppHandle, path: &Path) {
     if let Err(e) = app.asset_protocol_scope().allow_file(path) {
         log::warn!("asset scope: {e}");
     }
@@ -101,6 +101,8 @@ pub struct TakeInfo {
     pub audio: Option<bool>,
     /// Sounds kept on their own ("system", "mic": system.m4a, mic.m4a), for volumes in the editor.
     pub sounds: Vec<String>,
+    /// A small still of the recording for the library (thumb.jpg, made by `take_thumb`).
+    pub thumb: Option<String>,
 }
 
 /// The sound tracks a take keeps beside its recording.
@@ -110,6 +112,7 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
     let file = |n: &str| Some(dir.join(n)).filter(|p| p.is_file());
     let video = file("recording.mp4");
     let camera = file("camera.mp4");
+    let thumb = file("thumb.jpg");
     let mut exports: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|r| {
             r.filter_map(|e| e.ok().map(|e| e.path()))
@@ -124,10 +127,17 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
         .unwrap_or_default();
     exports.sort();
     let sounds: Vec<String> = SOUNDS.iter().filter(|n| dir.join(format!("{n}.m4a")).is_file()).map(|n| n.to_string()).collect();
-    for p in video.iter().chain(camera.iter()).chain(exports.iter()).cloned().chain(sounds.iter().map(|n| dir.join(format!("{n}.m4a")))) {
+    for p in video.iter().chain(camera.iter()).chain(thumb.iter()).chain(exports.iter()).cloned().chain(sounds.iter().map(|n| dir.join(format!("{n}.m4a")))) {
         allow(app, &p);
     }
-    let bytes = std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()?.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
+    // Pictures and sounds added in the editor (the preview shows and plays them).
+    if let Ok(r) = std::fs::read_dir(dir.join("media")) {
+        for e in r.filter_map(|e| e.ok()) {
+            allow(app, &e.path());
+        }
+    }
+    let media_bytes: u64 = std::fs::read_dir(dir.join("media")).map(|r| r.filter_map(|e| e.ok()?.metadata().ok()).map(|m| m.len()).sum()).unwrap_or(0);
+    let bytes = media_bytes + std::fs::read_dir(dir).map(|r| r.filter_map(|e| e.ok()?.metadata().ok()).map(|m| m.len()).sum::<u64>()).unwrap_or(0);
     let modified = std::fs::metadata(dir).ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
     TakeInfo {
         path: dir.display().to_string(),
@@ -140,7 +150,41 @@ fn take_info(app: &AppHandle, dir: &Path) -> TakeInfo {
         modified,
         audio: None,
         sounds,
+        thumb: thumb.map(|p| p.display().to_string()),
     }
+}
+
+/// Make the take's library still (thumb.jpg, 480 px wide, from one second in) if it has none;
+/// returns its path. One small JPEG per take instead of a video player per card keeps the library
+/// light on slower computers.
+#[tauri::command]
+pub async fn take_thumb(app: AppHandle, take: String) -> AppResult<String> {
+    let dir = take_dir(&app, &take)?;
+    let out = dir.join("thumb.jpg");
+    if !out.is_file() {
+        let video = dir.join("recording.mp4");
+        if !video.is_file() {
+            return Err(AppError::Invalid("The recording's files are missing.".into()));
+        }
+        let part = dir.join("thumb.part.jpg");
+        let mut cmd = new_command(&tools::ffmpeg()?);
+        cmd.args(["-hide_banner", "-nostdin", "-y", "-v", "error", "-ss", "1", "-i"]).arg(&video);
+        cmd.args(["-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-update", "1"]).arg(&part);
+        let ok = cmd.output().await.map(|o| o.status.success()).unwrap_or(false) && part.is_file();
+        // A recording shorter than a second: its first frame.
+        if !ok {
+            let mut cmd = new_command(&tools::ffmpeg()?);
+            cmd.args(["-hide_banner", "-nostdin", "-y", "-v", "error", "-i"]).arg(&video);
+            cmd.args(["-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "5", "-update", "1"]).arg(&part);
+            if !cmd.output().await.map(|o| o.status.success()).unwrap_or(false) || !part.is_file() {
+                let _ = std::fs::remove_file(&part);
+                return Err(AppError::Process("No still could be made.".into()));
+            }
+        }
+        std::fs::rename(&part, &out)?;
+    }
+    allow(&app, &out);
+    Ok(out.display().to_string())
 }
 
 /// Every take with a recording, newest first.
@@ -198,7 +242,7 @@ pub fn raw_discard(app: AppHandle, path: String) -> AppResult<()> {
 }
 
 /// Run FFmpeg with progress events; the output is written to a partial file and renamed.
-async fn render(app: &AppHandle, registry: &JobRegistry, job_id: &str, mut cmd: tokio::process::Command, out: &Path, duration: f64, what: &str) -> AppResult<()> {
+pub async fn render(app: &AppHandle, registry: &JobRegistry, job_id: &str, mut cmd: tokio::process::Command, out: &Path, duration: f64, what: &str) -> AppResult<()> {
     tools::validate_job_id(job_id)?;
     let guard = JobGuard::new(registry, job_id);
     // The partial file keeps the real extension (FFmpeg picks the container from it).
@@ -250,14 +294,15 @@ pub async fn camera_finish(app: AppHandle, registry: State<'_, JobRegistry>, job
 
 /// Export: FFmpeg reads the take's recording (input 0) and the `inputs` the graph uses, numbered
 /// from 1 in that order: "camera" (camera.mp4), "cursor" (the smooth cursor image), "system" and
-/// "mic" (the separate sound tracks). It runs the filter graph made by the app
-/// (core/exportGraph.ts: blur, cursor, zooms, frame, bubble, text, cuts; its size is the chosen
-/// quality). Arguments are passed as an argv array; the graph is one argument. `format` is "mp4"
-/// (H.264/AAC, `encoding` "fast" | "balanced" | "quality") or "gif" (the graph makes the palette).
-/// Returns the export's path in the take folder.
+/// "mic" (the separate sound tracks), and pictures and sounds by reference ("media:<name>" in the
+/// take's media folder, "builtin:<id>" wallpapers, "wallpaper:<name>" from the Wallpapers
+/// folder). It runs the filter graph made by the app (core/exportGraph.ts). Arguments are passed
+/// as an argv array; the graph is one argument. `format` is "mp4" (H.264/AAC, `encoding` "fast" |
+/// "balanced" | "quality") or "gif" (the graph makes the palette; `gif_loop` plays it again and
+/// again). Returns the export's path in the take folder.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
-pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, inputs: Vec<String>, duration: f64, fps: u32, format: String, encoding: String) -> AppResult<String> {
+pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_id: String, take: String, graph: String, inputs: Vec<String>, duration: f64, fps: u32, format: String, encoding: String, gif_loop: Option<bool>) -> AppResult<String> {
     let gif = match format.as_str() {
         "mp4" => false,
         "gif" => true,
@@ -269,7 +314,7 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
         "quality" => ("slow", "17"),
         _ => return Err(AppError::Invalid("Unknown encoding.".into())),
     };
-    if graph.len() > 2_000_000 {
+    if graph.len() > 2_000_000 || inputs.len() > 200 {
         return Err(AppError::Invalid("The export is too complex.".into()));
     }
     let dir = take_dir(&app, &take)?;
@@ -280,6 +325,7 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
             "camera" => dir.join("camera.mp4"),
             "system" | "mic" => dir.join(format!("{name}.m4a")),
             "cursor" => cursor_image(&app)?,
+            r if r.contains(':') => crate::media::resolve_ref(&app, &dir, r)?,
             _ => return Err(AppError::Invalid("Unknown export input.".into())),
         };
         extra.push(p);
@@ -302,9 +348,19 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
     for p in &extra {
         cmd.arg("-i").arg(p);
     }
+    // On computers with few cores one is left free, so everything else stays responsive while
+    // exporting (FFmpeg already runs below normal priority).
+    let spare = spare_threads();
+    if let Some(n) = spare {
+        cmd.arg("-filter_complex_threads").arg(n.to_string());
+    }
     cmd.arg("-filter_complex_script").arg(&script);
+    if let Some(n) = spare {
+        cmd.arg("-threads").arg(n.to_string());
+    }
     if gif {
-        cmd.args(["-map", "[vout]", "-an", "-loop", "0", "-r"]).arg(fps.clamp(5, 30).to_string());
+        let repeat = if gif_loop.unwrap_or(true) { "0" } else { "-1" };
+        cmd.args(["-map", "[vout]", "-an", "-loop", repeat, "-r"]).arg(fps.clamp(5, 30).to_string());
     } else {
         // The graph makes the sound ([aout]: volumes, cuts) when it changes it; otherwise the
         // recording's sound as is.
@@ -329,6 +385,13 @@ pub async fn take_export(app: AppHandle, registry: State<'_, JobRegistry>, job_i
         return Err(AppError::Validation("The export could not be read back.".into()));
     }
     Ok(out.display().to_string())
+}
+
+/// Threads for heavy FFmpeg work on a computer with 4 cores or fewer (all but one); None leaves
+/// FFmpeg its own choice on bigger computers.
+pub fn spare_threads() -> Option<usize> {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    (cores <= 4).then(|| cores.saturating_sub(1).max(1))
 }
 
 /// The smooth cursor image (src/assets/cursor.png, built into the app), written once next to

@@ -104,6 +104,75 @@ export function pointerZooms(clicks: readonly Point[], path: readonly Point[], d
   return out;
 }
 
+/** A zoom placed by hand: from `a` to `b` (recording seconds), at depth `zoom`, on (x, y). */
+export interface ManualZoom {
+  id: string;
+  a: number;
+  b: number;
+  zoom: number;
+  x: number;
+  y: number;
+}
+
+export const manualRegion = (m: ManualZoom): ZoomRegion => ({ start: m.a, end: m.b, zoom: m.zoom, fx: m.x, fy: m.y });
+
+/** Click zooms that do not overlap a zoom placed by hand (those win), and the manual ones. */
+export function withManual(regions: readonly ZoomRegion[], manual: readonly ManualZoom[]): ZoomRegion[] {
+  const own = manual.map(manualRegion);
+  return [...regions.filter((r) => !own.some((m) => m.start < r.end && m.end > r.start)), ...own].sort((a, b) => a.start - b.start);
+}
+
+/** A new zoom at `t` for `len` seconds (inside the recording). */
+export function newManualZoom(t: number, duration: number, at: { x: number; y: number } = { x: 0.5, y: 0.5 }, zoom = 1.8, len = 3): ManualZoom {
+  const a = Math.max(0, Math.min(t, duration - MIN_REGION));
+  return fitManualZoom({ id: `zoom-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`, a, b: Math.min(duration, a + len), zoom, x: at.x, y: at.y }, duration);
+}
+
+export function fitManualZoom(m: ManualZoom, duration: number): ManualZoom {
+  const r = (v: number) => Math.round(v * 1000) / 1000;
+  const a = Math.max(0, Math.min(m.a, m.b, duration - MIN_REGION));
+  const b = Math.min(duration, Math.max(m.a, m.b, a + MIN_REGION));
+  return { ...m, a: r(a), b: r(b), zoom: Math.min(3, Math.max(1.1, m.zoom)), x: r(Math.min(1, Math.max(0, m.x))), y: r(Math.min(1, Math.max(0, m.y))) };
+}
+
+export function validManualZooms(v: unknown): ManualZoom[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((m): m is ManualZoom => typeof m === "object" && m !== null && typeof m.id === "string" && [m.a, m.b, m.zoom, m.x, m.y].every((n) => typeof n === "number" && Number.isFinite(n)))
+    .map((m) => fitManualZoom(m, Number.POSITIVE_INFINITY));
+}
+
+/**
+ * Zoom suggestions from the pointer: places where it comes to rest (stays within a small circle
+ * for at least `dwell` seconds) after moving there. Each becomes a zoom on that spot, unless a
+ * zoom is there already.
+ */
+export function suggestZooms(path: readonly Point[], duration: number, taken: readonly ZoomRegion[], opts: { zoom: number; dwell?: number; radius?: number } = { zoom: 1.8 }): ManualZoom[] {
+  const dwell = opts.dwell ?? 1.2;
+  const radius = opts.radius ?? 0.035;
+  const out: ManualZoom[] = [];
+  let i = 0;
+  while (i < path.length) {
+    const p = path[i]!;
+    let j = i;
+    let sx = 0;
+    let sy = 0;
+    // Grow the stay while the pointer remains near its first point.
+    while (j < path.length && Math.hypot(path[j]!.x - p.x, path[j]!.y - p.y) <= radius) (sx += path[j]!.x), (sy += path[j]!.y), j++;
+    // The pointer log has points only while it moves: the stay lasts until the next point.
+    const end = j < path.length ? path[j]!.t : duration;
+    const moved = i > 0 && Math.hypot(path[i - 1]!.x - p.x, path[i - 1]!.y - p.y) > radius * 0.5;
+    if (end - p.t >= dwell && moved) {
+      const a = Math.max(0, p.t - ZOOM_RAMP * 0.5);
+      const b = Math.min(duration, Math.min(end, p.t + 4) + ZOOM_RAMP);
+      const busy = [...taken, ...out.map(manualRegion)].some((r) => r.start < b && r.end > a);
+      if (!busy && b - a >= MIN_REGION + 2 * ZOOM_RAMP) out.push(fitManualZoom({ id: `zoom-s${out.length}-${Math.round(p.t * 1000).toString(36)}`, a, b, zoom: opts.zoom, x: sx / (j - i), y: sy / (j - i) }, duration));
+    }
+    i = Math.max(i + 1, j);
+  }
+  return out;
+}
+
 /** Keys for the blocks: ease in, hold (gliding to each pan), ease out. */
 export function regionKeys(regions: readonly ZoomRegion[]): ZoomKey[] {
   const keys: ZoomKey[] = [];

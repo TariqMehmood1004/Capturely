@@ -1,6 +1,6 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { platform } from "../platform";
+import { listening, platform } from "../platform";
 import { MoonIcon, SunIcon } from "./icons";
 import { reducedMotion } from "./motion";
 import { applyTheme, chosenTheme, saveTheme, systemTheme, type Theme } from "./theme";
@@ -22,11 +22,10 @@ export function ThemeSwitch() {
     const mq = window.matchMedia("(prefers-color-scheme: light)");
     const sys = () => !chosenTheme() && setTheme(systemTheme());
     mq.addEventListener("change", sys);
-    let off: (() => void) | null = null;
-    void platform.theme.onChange(setTheme).then((u) => (off = u));
+    const off = listening(platform.theme.onChange(setTheme));
     return () => {
       mq.removeEventListener("change", sys);
-      off?.();
+      off();
     };
   }, []);
 

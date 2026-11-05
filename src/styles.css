@@ -163,8 +163,7 @@ input {
 .btn.danger {
   transition: opacity var(--fast) var(--ease), scale var(--fast) var(--ease);
 }
-.btn.danger:hover:not(:disabled),
-.lib-del.ask:hover {
+.btn.danger:hover:not(:disabled) {
   background: var(--danger);
   opacity: 0.85;
 }
@@ -1059,15 +1058,23 @@ input {
   translate: -50% 0;
 }
 /* Countdown: no card. The number floats over whatever is on screen (a soft shadow keeps it
-   readable on light and dark content) inside a ring that runs out each second. */
+   readable on light and dark content) inside one ring that runs out over the whole countdown,
+   with its label on its own line under it. */
 .cd {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  color: #fff;
+  pointer-events: none;
+}
+/* The ring and the number in its middle. */
+.cd-dial {
   position: relative;
   display: grid;
   place-items: center;
-  width: 220px;
-  height: 220px;
-  color: #fff;
-  pointer-events: none;
+  width: 210px;
+  height: 210px;
 }
 .cd-ring {
   position: absolute;
@@ -1075,18 +1082,23 @@ input {
   width: 100%;
   height: 100%;
   rotate: -90deg;
-  filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.55)) drop-shadow(0 2px 8px rgb(0 0 0 / 0.4));
+  filter: drop-shadow(0 1px 6px rgb(0 0 0 / 0.45));
 }
 .cd-ring circle {
   fill: none;
   stroke-width: 5;
 }
 .cd-track {
-  stroke: rgb(255 255 255 / 0.4);
+  stroke: rgb(255 255 255 / 0.32);
 }
 .cd-run {
   stroke: #fff;
   stroke-linecap: round;
+}
+/* Both numbers share one cell: the old one slides up and fades as the new one arrives. */
+.cd-digits {
+  display: grid;
+  place-items: center;
 }
 .cd-num,
 .cd-ghost {
@@ -1095,21 +1107,22 @@ input {
   font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  text-shadow: 0 0 2px rgb(0 0 0 / 0.6), 0 2px 10px rgb(0 0 0 / 0.5), 0 10px 40px rgb(0 0 0 / 0.45);
+  letter-spacing: -0.03em;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 4px 24px rgb(0 0 0 / 0.45);
+  will-change: transform, opacity;
 }
 .cd-ghost:empty {
   display: none;
 }
 .cd em {
-  position: absolute;
-  bottom: -30px;
-  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: rgb(10 12 18 / 0.55);
+  font-size: 11.5px;
   font-style: normal;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  text-shadow: 0 0 2px rgb(0 0 0 / 0.7), 0 1px 8px rgb(0 0 0 / 0.6);
 }
 @media (prefers-reduced-motion: reduce) {
   .cb-progress i.busy {
@@ -1134,13 +1147,61 @@ input {
   inset: 0;
   overflow: hidden;
 }
-.take-picture video {
+/* The zoom moves this layer: the (cropped) recording, its blurs and the cursor. */
+.take-zoom {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  transform-origin: 0 0;
+}
+.take-zoom video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform-origin: 0 0;
   cursor: pointer;
+}
+/* The background around a framed picture (a blurred picture reaches past the edges). */
+.take-bg {
+  position: absolute;
+  inset: 0;
+}
+.take-stage.picking .take-picture,
+.take-stage.picking .take-zoom video {
+  cursor: crosshair;
+}
+/* Where a zoom placed by hand looks. */
+.take-spot {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--accent);
+  translate: -50% -50%;
+  pointer-events: none;
+}
+/* Pictures and shapes over the video. */
+.take-art img {
+  position: absolute;
+  z-index: 2;
+  object-fit: fill;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+.take-art.sel img {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.take-art.off img {
+  opacity: 0.45;
+}
+.take-art .take-handle {
+  z-index: 3;
+  right: auto;
+  bottom: auto;
+  translate: -50% -50%;
 }
 .take-ring {
   position: absolute;
@@ -1164,229 +1225,22 @@ input {
 }
 .take-cam {
   position: absolute;
+  z-index: 1;
   aspect-ratio: 1;
-  overflow: hidden;
-  border-radius: 50%;
+  cursor: move;
+  touch-action: none;
 }
 .take-cam video {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transform: scaleX(-1);
+  pointer-events: none;
 }
-.take-cam.bottom-right { right: 3%; bottom: 5%; }
-.take-cam.bottom-left { left: 3%; bottom: 5%; }
-.take-cam.top-right { right: 3%; top: 5%; }
-.take-cam.top-left { left: 3%; top: 5%; }
 
 .btn.danger {
   background: var(--danger);
   color: #fff;
-}
-/* Library (ui/LibraryPage.tsx). */
-.lib-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 34px;
-  margin: 8px 0 16px;
-}
-.lib-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
-.lib-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 14px;
-}
-.lib-card {
-  position: relative;
-  border-radius: var(--radius);
-  background: var(--surface);
-  transition: background var(--fast) var(--ease), translate var(--fast) var(--ease);
-}
-.lib-card:hover {
-  background: var(--surface-2);
-  translate: 0 -2px;
-}
-.lib-open {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 10px;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-/* Picked: the accent fill grows out of the check like a pill spreading over the card. */
-.lib-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: var(--accent-soft);
-  clip-path: circle(0 at 30px 30px);
-  pointer-events: none;
-  transition: clip-path 0.45s cubic-bezier(0.3, 1, 0.4, 1);
-}
-.lib-card.picked::before {
-  clip-path: circle(150% at 30px 30px);
-}
-.lib-open,
-.lib-del,
-.lib-check {
-  z-index: 1;
-}
-.lib-open {
-  position: relative;
-}
-/* Being deleted: the fill turns red at once, then the card shrinks away (GSAP). */
-.lib-card.leaving::before {
-  background: color-mix(in srgb, var(--danger) 22%, transparent);
-  clip-path: circle(150% at 30px 30px);
-  transition-duration: 0.2s;
-  transition-delay: 0s;
-}
-.lib-card.leaving {
-  pointer-events: none;
-}
-.lib-empty {
-  animation: ed-fade 0.35s var(--ease);
-}
-/* Select all / none: one card after another. */
-.lib-grid.cascade .lib-card::before,
-.lib-grid.cascade .lib-check {
-  transition-delay: calc(var(--i, 0) * 45ms);
-}
-/* Delete on each card: a round button on the picture, shown on hover; it asks once. */
-.lib-del {
-  position: absolute;
-  top: 18px;
-  right: 18px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  min-width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: rgb(12 12 16 / 0.62);
-  color: #fff;
-  opacity: 0;
-  cursor: pointer;
-  transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease), scale var(--fast) var(--ease);
-}
-.lib-card:hover .lib-del,
-.lib-card:focus-within .lib-del,
-.lib-del.ask {
-  opacity: 1;
-}
-.lib-del:hover {
-  background: var(--danger);
-  scale: 1.06;
-}
-.lib-del.ask {
-  padding: 0 12px;
-  background: var(--danger);
-  font-size: 12px;
-  font-weight: 600;
-}
-.lib-del svg {
-  width: 16px;
-  height: 16px;
-}
-/* Selecting: a check on each picture. */
-.lib-check {
-  position: absolute;
-  top: 18px;
-  left: 18px;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: rgb(12 12 16 / 0.5);
-  color: transparent;
-  pointer-events: none;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), scale 0.25s cubic-bezier(0.3, 1.4, 0.5, 1);
-}
-.lib-check svg {
-  width: 14px;
-  height: 14px;
-  stroke-width: 2.5;
-}
-.lib-check.on {
-  background: var(--accent);
-  color: var(--accent-ink);
-  scale: 1.1;
-}
-.lib-check.on svg {
-  animation: lib-tick 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
-  animation-delay: inherit;
-}
-.lib-grid.cascade .lib-check.on svg {
-  animation-delay: calc(var(--i, 0) * 45ms);
-}
-@keyframes lib-tick {
-  from {
-    scale: 0.3;
-    opacity: 0;
-  }
-}
-.lib-tools {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.lib-tools .btn {
-  height: 32px;
-  gap: 6px;
-  padding: 0 12px;
-  border-radius: var(--radius);
-  font-size: 12px;
-}
-.lib-tools .btn svg {
-  width: 15px;
-  height: 15px;
-}
-.btn.lib-delete {
-  color: var(--danger);
-}
-.btn.lib-delete:disabled {
-  color: var(--muted);
-}
-.lib-count {
-  margin-right: 4px;
-  font-size: 12px;
-  color: var(--muted);
-}
-.lib-thumb {
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  margin-bottom: 6px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-3);
-}
-.lib-thumb video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.lib-empty {
-  display: grid;
-  justify-items: center;
-  gap: 12px;
-  padding: 60px 0;
-  color: var(--muted);
-}
-.lib-empty svg {
-  width: 40px;
-  height: 40px;
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2442,25 +2296,6 @@ body.resizing-y * {
 .ed-transport-main {
   --glide: var(--surface-2);
 }
-/* The recording just made, marked in the library. */
-.lib-thumb {
-  position: relative;
-}
-.lib-new {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  padding: 2px 9px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-}
-.lib-card.fresh {
-  background: var(--accent-soft);
-}
 
 /* Two-line options in a segmented control (label over a detail, e.g. a size). */
 .ui-seg button.two {
@@ -2778,12 +2613,8 @@ body.resizing-y * {
 .ed-stage .take-stage {
   border-radius: var(--radius-sm);
 }
-.ed-card,
-.lib-card {
+.ed-card {
   transition: background var(--fast) var(--ease), translate 0.25s var(--ease);
-}
-.lib-card:hover {
-  translate: 0 -2px;
 }
 .btn,
 .cb-icon,
@@ -2811,9 +2642,6 @@ body.resizing-y * {
   scale: 0.94;
 }
 @media (prefers-reduced-motion: reduce) {
-  .lib-card:hover {
-    translate: none;
-  }
   .btn,
   .cb-icon,
   .cb-rec,
@@ -2824,8 +2652,7 @@ body.resizing-y * {
   .ed-rail-btn,
   .theme-btn,
   .win-btn,
-  .ed-card,
-  .lib-card {
+  .ed-card {
     transition: none;
     scale: none;
   }
@@ -2896,83 +2723,6 @@ h3,
 .page {
   padding: 12px 32px 32px;
 }
-.lib-head {
-  margin: 14px 0 22px;
-}
-.lib-head h2 {
-  font-size: 26px;
-  font-weight: 600;
-}
-.lib-grid {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 22px 18px;
-}
-.lib-card,
-.lib-card:hover {
-  background: transparent;
-  translate: none;
-}
-.lib-open {
-  gap: 2px;
-  padding: 0 0 6px;
-}
-.lib-open strong {
-  margin-top: 4px;
-  overflow: hidden;
-  font-size: 13.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.lib-thumb {
-  margin-bottom: 6px;
-  border-radius: var(--radius);
-  background: var(--surface-3);
-  transition: translate 0.3s var(--ease), box-shadow 0.3s var(--ease);
-}
-.lib-thumb video {
-  transition: scale 0.5s var(--ease), filter 0.3s var(--ease);
-}
-.lib-card:hover .lib-thumb {
-  translate: 0 -3px;
-  box-shadow: 0 12px 28px rgb(0 0 0 / 0.18);
-}
-.lib-card:hover .lib-thumb video {
-  scale: 1.04;
-  filter: brightness(1.05);
-}
-.lib-open:focus-visible {
-  outline: none;
-}
-.lib-open:focus-visible .lib-thumb {
-  box-shadow: 0 0 0 3px var(--accent);
-}
-.lib-dur {
-  position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 2px 7px;
-  border-radius: 6px;
-  background: rgb(0 0 0 / 0.62);
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.lib-card.fresh {
-  background: transparent;
-}
-.lib-card.fresh .lib-thumb {
-  box-shadow: 0 0 0 3px var(--accent);
-}
-.lib-card::before {
-  inset: -6px;
-}
-.lib-del {
-  top: 8px !important;
-  right: 8px !important;
-}
-
 /* Editor: segmented inspector tabs, a bigger play button, softer rail. */
 .ed-tabs {
   gap: 2px;
@@ -3034,19 +2784,6 @@ h3,
   height: 42px;
   box-shadow: 0 0 0 5px var(--rec-soft);
 }
-@media (prefers-reduced-motion: reduce) {
-  .lib-thumb,
-  .lib-thumb video {
-    transition: none;
-  }
-  .lib-card:hover .lib-thumb {
-    translate: none;
-  }
-  .lib-card:hover .lib-thumb video {
-    scale: none;
-  }
-}
-
 /* Shortcut keys in the bar's Recording settings (hotkeys.rs). */
 .cb-keys {
   display: grid;
@@ -3215,6 +2952,13 @@ h3,
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   pointer-events: none;
 }
+.ed-speedmask.slow {
+  background: color-mix(in srgb, var(--marker) 20%, transparent);
+}
+.ed-speedmask.slow b {
+  background: var(--marker);
+  color: #111;
+}
 .ed-speedmask b {
   margin-top: 3px;
   padding: 0 6px;
@@ -3265,4 +3009,812 @@ h3,
   white-space: normal;
   border-radius: var(--radius-sm);
   color: var(--marker);
+}
+
+/* Timeline: a lane for extra sound; zooms placed by hand. */
+.ed-tl-heads.with-audio,
+.ed-lanes.with-audio {
+  grid-template-rows: 22px 44px 44px 36px;
+}
+.ed-lane.zooms span.hand {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.ed-lane.zooms span.hand.sel {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.ed-lane.audio span {
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--marker) 22%, transparent);
+  color: var(--text);
+  cursor: pointer;
+}
+.ed-lane.audio span.sel {
+  background: var(--marker);
+  color: #111;
+}
+
+/* Colour pickers (backgrounds). */
+.ed-colors {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.ed-color {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: 600 12px var(--mono);
+  cursor: pointer;
+}
+.ed-color input {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+}
+.ed-color input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+.ed-color input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 50%;
+}
+
+/* Marks: the add buttons share the row. */
+.ed-mark-add .btn {
+  flex: 1 1 calc(50% - 4px);
+  justify-content: center;
+}
+
+/* The shortcut list. */
+.ed-keys {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+.ed-keys div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ed-keys dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.ed-keys dd {
+  margin: 0;
+}
+.ed-keys kbd {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  font: 600 11px var(--mono);
+  white-space: nowrap;
+}
+.ed-keys kbd.taken {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+/* Capture bar: a shortcut key is a button that waits for new keys. */
+.cb-key {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.cb-key.on kbd {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.cb-key-hint {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--muted);
+}
+
+/* Inspector tabs: when the inspector is narrow, only the open tab shows its name. */
+.ed-inspector {
+  container-type: inline-size;
+}
+.ed-tab {
+  min-width: 0;
+}
+@container (max-width: 400px) {
+  .ed-tab:not(.on) span {
+    display: none;
+  }
+  .ed-tab.on {
+    flex: 2.2;
+  }
+}
+
+/* Library (ui/LibraryPage.tsx): a title with what is there, a toolbar that stays at the top
+   (search, order, select), recordings grouped by day as a gallery of flat cards. */
+.page.lib {
+  padding: 8px 32px 40px;
+}
+.lib-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  margin: 18px 0 16px;
+}
+.lib-title {
+  display: grid;
+  gap: 4px;
+}
+.lib-title h2 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.lib-stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.lib-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.lib-folder:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.lib-folder svg {
+  width: 14px;
+  height: 14px;
+}
+.lib-files {
+  display: flex;
+  gap: 6px;
+}
+
+/* The toolbar: one flat strip that stays in view while the gallery scrolls. */
+.lib-bar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 -8px 6px;
+  padding: 8px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+.lib-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(360px, 100%);
+  height: 32px;
+  padding: 0 0 0 12px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: text;
+  transition: background var(--fast) var(--ease);
+}
+.lib-search:focus-within {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.lib-search > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.lib-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.lib-search input::placeholder {
+  color: var(--muted);
+}
+.lib-clear {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.lib-clear:hover {
+  color: var(--text);
+}
+.lib-clear svg {
+  width: 15px;
+  height: 15px;
+}
+.lib-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lib-tools .btn {
+  height: 32px;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+.lib-tools .btn svg {
+  width: 15px;
+  height: 15px;
+}
+.btn.lib-delete {
+  color: var(--danger);
+}
+.btn.lib-delete:disabled {
+  color: var(--muted);
+}
+.lib-count {
+  margin: 0 4px 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+/* Groups of the gallery. */
+.lib-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 22px 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.lib-group h3 span {
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+  text-align: center;
+}
+.lib-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 22px 18px;
+}
+
+/* A card: the still on top (length, badges, play on hover), the name and details under it. */
+.lib-card {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--radius);
+}
+.lib-open {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.lib-open:focus-visible {
+  outline: none;
+}
+.lib-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface-3);
+}
+.lib-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: scale 0.5s var(--ease);
+}
+.lib-thumb-empty {
+  width: 30px;
+  height: 30px;
+  color: var(--muted);
+}
+.lib-card:hover .lib-thumb img {
+  scale: 1.04;
+}
+.lib-open:focus-visible .lib-thumb,
+.lib-card.fresh .lib-thumb {
+  box-shadow: 0 0 0 3px var(--accent);
+}
+.lib-play {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgb(10 12 18 / 0.6);
+  color: #fff;
+  opacity: 0;
+  scale: 0.8;
+  transition: opacity var(--fast) var(--ease), scale 0.3s var(--ease);
+}
+.lib-play svg {
+  width: 20px;
+  height: 20px;
+  translate: 1px 0;
+}
+.lib-card:hover .lib-play,
+.lib-open:focus-visible .lib-play {
+  opacity: 1;
+  scale: 1;
+}
+.lib-dur,
+.lib-badges span,
+.lib-new {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.lib-dur {
+  right: 8px;
+  bottom: 8px;
+}
+.lib-badges {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  display: flex;
+  gap: 4px;
+}
+.lib-badges span {
+  position: static;
+}
+.lib-badges svg {
+  width: 13px;
+  height: 13px;
+}
+.lib-new {
+  top: 10px;
+  left: 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  letter-spacing: 0.03em;
+}
+.lib-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 2px;
+}
+.lib-info strong {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lib-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.lib-meta svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+
+/* Delete on each card: a round button on the still, shown on hover; it asks once. */
+.lib-del {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(12 12 16 / 0.62);
+  color: #fff;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--fast) var(--ease), background var(--fast) var(--ease), scale var(--fast) var(--ease);
+}
+.lib-card:hover .lib-del,
+.lib-card:focus-within .lib-del,
+.lib-del.ask {
+  opacity: 1;
+}
+.lib-del:hover {
+  background: var(--danger);
+  scale: 1.06;
+}
+.lib-del.ask {
+  padding: 0 12px;
+  background: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+.lib-del svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Selecting: a check on each still; a picked card fills with the accent from its check. */
+.lib-card::before {
+  content: "";
+  position: absolute;
+  inset: -8px;
+  border-radius: calc(var(--radius) + 6px);
+  background: var(--accent-soft);
+  clip-path: circle(0 at 32px 32px);
+  pointer-events: none;
+  transition: clip-path 0.45s cubic-bezier(0.3, 1, 0.4, 1);
+}
+.lib-card.picked::before {
+  clip-path: circle(150% at 32px 32px);
+}
+.lib-check {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgb(12 12 16 / 0.5);
+  color: transparent;
+  pointer-events: none;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease), scale 0.25s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.lib-check svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.5;
+}
+.lib-check.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  scale: 1.1;
+}
+.lib-check.on svg {
+  animation: lib-tick 0.35s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+.lib-grid.cascade .lib-card::before,
+.lib-grid.cascade .lib-check {
+  transition-delay: calc(var(--i, 0) * 45ms);
+}
+.lib-grid.cascade .lib-check.on svg {
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+@keyframes lib-tick {
+  from {
+    scale: 0.3;
+    opacity: 0;
+  }
+}
+/* Being deleted: the fill turns red at once, then the card shrinks away (GSAP). */
+.lib-card.leaving::before {
+  background: color-mix(in srgb, var(--danger) 22%, transparent);
+  clip-path: circle(150% at 32px 32px);
+  transition-duration: 0.2s;
+  transition-delay: 0s;
+}
+.lib-card.leaving {
+  pointer-events: none;
+}
+
+/* Nothing yet: no card, straight on the page, in the middle of the window: a softly ringed
+   mark, a headline, one line of what Capturely does, the ways to start, and the record key. */
+.lib-files.hidden {
+  visibility: hidden;
+}
+.lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: calc(100vh - 230px);
+  padding: 24px 0 48px;
+  text-align: center;
+}
+.lib-empty-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 128px;
+  height: 128px;
+  margin-bottom: 6px;
+  color: var(--accent);
+}
+.lib-empty-mark i {
+  position: absolute;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.lib-empty-mark i:first-child {
+  inset: 0;
+  animation: lib-breathe 3.2s ease-in-out infinite;
+}
+.lib-empty-mark i:nth-child(2) {
+  inset: 22px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.lib-empty-mark svg {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+@keyframes lib-breathe {
+  50% {
+    scale: 1.07;
+    opacity: 0.6;
+  }
+}
+.lib-empty h3 {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  color: var(--text);
+}
+.lib-empty p {
+  max-width: 470px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.lib-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.lib-empty-actions .rec-go {
+  margin-right: 6px;
+}
+.lib-empty-points {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 24px;
+  margin: 26px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.lib-empty-points li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.lib-empty-points svg {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+.lib-empty-key {
+  font-size: 12px;
+  color: var(--muted);
+}
+.lib-empty-key kbd {
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  font: 600 11px var(--mono);
+}
+.lib-none {
+  margin: 40px 0;
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+}
+@media (max-width: 720px) {
+  .page.lib {
+    padding: 8px 16px 32px;
+  }
+  .lib-bar {
+    border-radius: 18px;
+  }
+  .lib-search {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lib-thumb img,
+  .lib-play,
+  .lib-del,
+  .lib-check,
+  .lib-card::before,
+  .lib-folder,
+  .lib-search {
+    transition: none;
+  }
+  .lib-card:hover .lib-thumb img {
+    scale: none;
+  }
+  .lib-check.on svg,
+  .lib-empty-mark i {
+    animation: none;
+  }
+}
+
+/* Capture bar docked at a side of the screen (Bar.tsx, shell.rs bar_dock): it stands upright,
+   its panels open beside it towards the middle of the screen, labels fold into their icons. */
+.cb-shell.dock-left,
+.cb-shell.dock-right {
+  top: 50%;
+  bottom: auto;
+  flex-direction: row;
+  padding: 22px;
+  transform: translateY(-50%);
+}
+.cb-shell.dock-left {
+  left: 0;
+  flex-direction: row-reverse;
+}
+.cb-shell.dock-right {
+  right: 0;
+  left: auto;
+}
+.dock-left .cb-bar,
+.dock-right .cb-bar {
+  flex-direction: column;
+  width: 60px;
+  height: auto;
+  padding: 10px 0;
+}
+/* The six dots lie across the top. */
+.dock-left .cb-grip,
+.dock-right .cb-grip {
+  grid-template-columns: repeat(3, 3px);
+  align-self: center;
+  justify-content: center;
+  padding: 4px 12px 6px;
+}
+.dock-left .cb-sep,
+.dock-right .cb-sep {
+  width: 22px;
+  height: 1px;
+  margin: 6px 0;
+}
+.dock-left .cb-source,
+.dock-right .cb-source {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+}
+.dock-left .cb-source span,
+.dock-left .cb-source .cb-chev,
+.dock-right .cb-source span,
+.dock-right .cb-source .cb-chev,
+.dock-left .cb-status,
+.dock-right .cb-status,
+.dock-left .cb-stop span,
+.dock-right .cb-stop span {
+  display: none;
+}
+.dock-left .cb-stop,
+.dock-right .cb-stop {
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 4px 0;
+  padding: 0;
+  border-radius: 50%;
+}
+.dock-left .cb-time,
+.dock-right .cb-time {
+  margin: 4px 0 6px;
+  font-size: 13px;
+}
+.dock-left .cb-bar.recording .rec-dot,
+.dock-right .cb-bar.recording .rec-dot {
+  margin: 4px 0 0;
+}
+.dock-left .cb-rec,
+.dock-right .cb-rec {
+  margin: 6px 0;
+}
+.dock-left .cb-bar .btn,
+.dock-right .cb-bar .btn {
+  padding: 0 8px;
+  font-size: 11px;
+}
+.dock-left .cb-spinner,
+.dock-right .cb-spinner {
+  margin: 6px 0;
+}
+.dock-left .cb-progress,
+.dock-right .cb-progress {
+  width: 36px;
+  margin: 8px 0 6px;
+}
+
+/* The bar held at its idle length (Bar.tsx): the status line takes the room, so nothing jumps. */
+.cb-bar.steady .cb-status {
+  flex: 1;
+  max-width: none;
+}
+.dock-left .cb-bar.steady,
+.dock-right .cb-bar.steady {
+  justify-content: center;
 }

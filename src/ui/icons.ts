@@ -39,5 +39,16 @@ export {
   BoltIcon,
   PlusIcon,
   AdjustmentsHorizontalIcon,
+  QuestionMarkCircleIcon,
+  ChatBubbleLeftRightIcon,
+  MusicalNoteIcon,
+  PaintBrushIcon,
+  ArrowUpTrayIcon,
+  DocumentArrowDownIcon,
+  DocumentArrowUpIcon,
+  SparklesIcon,
+  CommandLineIcon,
+  ArrowsPointingOutIcon,
+  MagnifyingGlassIcon,
 } from "@heroicons/react/24/outline";
 export { BackwardIcon, ForwardIcon, PauseIcon, PlayIcon, StopIcon } from "@heroicons/react/20/solid";

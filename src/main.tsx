@@ -21,7 +21,8 @@ if (label !== "editor") document.documentElement.dataset.overlay = label;
 installGlide();
 // The chosen theme before the first paint, and later changes made in another window.
 applyTheme(chosenTheme());
-void platform.theme.onChange((t) => applyTheme(t));
+// A theme chosen in another window: the colours fade over.
+void platform.theme.onChange((t) => applyTheme(t, "fade"));
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

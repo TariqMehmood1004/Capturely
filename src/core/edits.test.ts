@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CURSOR } from "./cursor";
 import { addSpeeds, addSplit, cutExpr, editedZooms, editZoom, EMPTY_EDIT, keptDuration, keptSpans, pieces, playFrom, removeSpeeds, togglePiece, validEdit } from "./edits";
 
 describe("cuts", () => {
@@ -58,7 +59,16 @@ describe("zoom edits", () => {
     const e = validEdit({ speeds: [{ a: 4, b: 2, rate: 4 }, { a: 1, b: 3, rate: 4 }, { a: 5, b: 6, rate: 99 }], sound: { system: 5, mic: 0.4, clean: true }, cursor: { on: false, size: 9 } });
     expect(e.speeds).toEqual([{ a: 1, b: 3, rate: 4 }]);
     expect(e.sound).toEqual({ system: 2, mic: 0.4, clean: true });
-    expect(e.cursor).toEqual({ on: false, size: 3, smooth: 0.5 });
+    expect(e.cursor).toEqual({ ...DEFAULT_CURSOR, on: false, size: 3 });
+  });
+
+  it("keeps slow-downs, extra sound and the look", () => {
+    const e = validEdit({ speeds: [{ a: 1, b: 2, rate: 0.5 }, { a: 3, b: 4, rate: 1 }], audio: [{ id: "m", file: "media:song.mp3", name: "Song", a: 2, len: 30, from: 0, volume: 3 }, { id: "x", file: "C:/x.mp3" }], style: { aspect: "9:16", crop: { x: 0.1, y: 0, w: 0.5, h: 1 } } });
+    expect(e.speeds).toEqual([{ a: 1, b: 2, rate: 0.5 }]);
+    expect(e.audio).toEqual([{ id: "m", file: "media:song.mp3", name: "Song", a: 2, len: 30, from: 0, volume: 2 }]);
+    expect(e.style.aspect).toBe("9:16");
+    expect(e.style.crop).toEqual({ x: 0.1, y: 0, w: 0.5, h: 1 });
+    expect(e.style.zoom.on).toBe(true);
   });
 
   it("speeds stretches up, replacing what they overlap", () => {

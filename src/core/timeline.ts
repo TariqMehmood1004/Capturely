@@ -1,5 +1,5 @@
 // The finished video's clock: the recording with cuts left out and some stretches sped up (quiet
-// parts). Every effect runs on the recording's own seconds; this maps them to the output at the
+// parts) or slowed down. Every effect runs on the recording's own seconds; this maps them to the output at the
 // very end of the export, and tells the preview how fast to play. Pure.
 import { mergeSpans, type Span, type SpeedSpan } from "./edits";
 
@@ -8,14 +8,16 @@ export interface Segment extends Span {
   rate: number;
 }
 
+/** Speed-ups offered (quiet parts), and every rate a speed region can have. */
 export const SPEEDS = [2, 4, 8] as const;
+export const RATES = [0.25, 0.5, 2, 4, 8] as const;
 const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
 /** The recording cut into segments, in order, covering 0..duration. Cuts win over speeds. */
 export function segments(duration: number, cuts: readonly Span[], speeds: readonly SpeedSpan[] = []): Segment[] {
   const marks = new Set([0, duration]);
   const cutList = mergeSpans(cuts, duration);
-  const speedList = speeds.filter((s) => s.rate > 1 && s.b > s.a).map((s) => ({ a: Math.max(0, s.a), b: Math.min(duration, s.b), rate: s.rate }));
+  const speedList = speeds.filter((s) => s.rate > 0 && Math.abs(s.rate - 1) > 1e-6 && s.b > s.a).map((s) => ({ a: Math.max(0, s.a), b: Math.min(duration, s.b), rate: s.rate }));
   for (const s of [...cutList, ...speedList]) marks.add(s.a).add(s.b);
   const at = [...marks].filter((t) => t >= 0 && t <= duration).sort((x, y) => x - y);
   const out: Segment[] = [];
@@ -81,9 +83,32 @@ export function videoTimeChain(segs: readonly Segment[], fps: number, input: str
   return `${input}${select}setpts='(${pts})/TB',fps=${fps}${out}`;
 }
 
+/** `atempo` steps for a rate (each step must stay within 0.5 .. 2). */
+function tempo(rate: number): string[] {
+  const out: string[] = [];
+  let r = rate;
+  while (r < 0.5 - 1e-9) (out.push("atempo=0.5"), (r /= 0.5));
+  while (r > 2 + 1e-9) (out.push("atempo=2"), (r /= 2));
+  if (Math.abs(r - 1) > 1e-6) out.push(`atempo=${r3(r)}`);
+  return out;
+}
+
 /** The sound on the output clock: kept pieces at normal speed; a sped-up piece keeps only its
- *  start (as long as the piece now lasts), so sound and picture stay together. */
+ *  start (as long as the piece now lasts), a slowed-down piece is stretched (pitch kept), so
+ *  sound and picture stay together. */
 export function audioTimeChain(segs: readonly Segment[], input: string, out: string): string {
-  const keep = played(segs).map((s) => `between(t,${r3(s.a)},${r3(s.a + (s.b - s.a) / s.rate)})`);
-  return `${input}aselect='${keep.join("+")}',asetpts=N/SR/TB${out}`;
+  const list = played(segs);
+  if (list.every((s) => s.rate >= 1)) {
+    const keep = list.map((s) => `between(t,${r3(s.a)},${r3(s.a + (s.b - s.a) / s.rate)})`);
+    return `${input}aselect='${keep.join("+")}',asetpts=N/SR/TB${out}`;
+  }
+  // Slowed pieces need their own tempo: each piece is trimmed, changed and joined again.
+  const labels = list.map((_, i) => `[ats${i}]`);
+  const parts = list.map((s, i) => {
+    const end = s.rate > 1 ? s.a + (s.b - s.a) / s.rate : s.b;
+    return `${labels[i]}atrim=start=${r3(s.a)}:end=${r3(end)},asetpts=PTS-STARTPTS${s.rate < 1 ? `,${tempo(s.rate).join(",")}` : ""}[atp${i}]`;
+  });
+  const split = list.length > 1 ? `${input}asplit=${list.length}${labels.join("")}` : `${input}anull${labels[0]}`;
+  const join = list.length > 1 ? `${list.map((_, i) => `[atp${i}]`).join("")}concat=n=${list.length}:v=0:a=1${out}` : `[atp0]anull${out}`;
+  return [split, ...parts, join].join(";\n");
 }

@@ -1,30 +1,38 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import cursorImg from "../assets/cursor.png";
-import { cursorAt, cursorImageShare, cursorTrack } from "../core/cursor";
-import { buildExportGraph, RING_TIME } from "../core/exportGraph";
-import { fitMark, newMark, type Mark } from "../core/marks";
+import { blurAt, cursorImageShare, cursorPoses, cursorTrack, poseAt } from "../core/cursor";
+import { RING_TIME } from "../core/exportGraph";
+import { PLAIN_FRAME, frameCss } from "../core/frame";
+import { fitMark, imageBox, newMark, shapeSvg, SHAPE_COLORS, SHAPES, type Mark } from "../core/marks";
 import { quietSpans } from "../core/quiet";
-import { isPlain, outDuration, rateAt, segments, SPEEDS } from "../core/timeline";
-import { DEFAULT_FRAME, FRAME_BACKGROUNDS, frameCss, type ScreenFrame } from "../core/frame";
-import { BUBBLE_SPOTS, type BubbleSpot } from "../core/recorder";
-import { clickRegions, pointerZooms, regionKeys, viewAt, zoomView, type AfterClick } from "../core/zoom";
-import { errorMessage, platform, type ExportInput, type PlatformInfo, type TakeInfo } from "../platform";
-import { addSpeeds, addSplit, editedZooms, editZoom, EMPTY_EDIT, isCut, mergeSpans, pieces, playFrom, removeSpeeds, togglePiece, validEdit, type Span, type TakeEdit } from "../core/edits";
-import { DEFAULT_EXPORT, ENCODINGS, exportFps, exportSize, FPS_CHOICES, QUALITIES, savePreset, validExport, validPreset, type EditorPreset, type ExportSettings } from "../core/exportSettings";
-import { Dropdown, Segmented, Slider, Swatches, Switch } from "./controls";
+import { camReact, cameraBox, cropPoint, DEFAULT_STYLE, layout, type CameraLook, type EditorStyle } from "../core/style";
+import { isPlain, outDuration, rateAt, RATES, segments, SPEEDS } from "../core/timeline";
+import { clickRegions, fitManualZoom, manualRegion, newManualZoom, pointerZooms, regionKeys, suggestZooms, viewAt, withManual, zoomView, type ManualZoom } from "../core/zoom";
+import { errorMessage, platform, type Hotkey, type PlatformInfo, type TakeData, type TakeInfo } from "../platform";
+import { addSpeeds, addSplit, editedZooms, editZoom, EMPTY_EDIT, isCut, mergeSpans, pieces, playFrom, removeSpeeds, togglePiece, validEdit, type AudioClip, type Span, type TakeEdit } from "../core/edits";
+import { DEFAULT_EXPORT, ENCODINGS, exportScale, FPS_CHOICES, GIF_WIDTHS, QUALITIES, qualityScale, savePreset, validExport, validPreset, type EditorPreset, type ExportSettings } from "../core/exportSettings";
+import { CameraPanel } from "./CameraPanel";
+import { Dropdown, Segmented, Slider, Switch } from "./controls";
+import { planExport } from "./exportRun";
+import { FramePanel } from "./FramePanel";
+import { refUrl } from "./media";
 import { MOTION, reducedMotion } from "./motion";
-import { BoltIcon, ChatBubbleBottomCenterTextIcon, EyeSlashIcon, SpeakerWaveIcon } from "./icons";
-import { ArrowDownTrayIcon, ArrowUturnLeftIcon, ArrowUturnRightIcon, BackwardIcon, BookmarkIcon, ChevronDownIcon, CursorArrowRaysIcon, FilmIcon, FlagIcon, FolderOpenIcon, ForwardIcon, InformationCircleIcon, ListBulletIcon, MagnifyingGlassPlusIcon, PauseIcon, PhotoIcon, PlayIcon, ScissorsIcon, TrashIcon, VideoCameraIcon } from "./icons";
+import { BoltIcon, ChatBubbleBottomCenterTextIcon, ChatBubbleLeftRightIcon, ClockIcon, DocumentArrowDownIcon, EyeSlashIcon, MusicalNoteIcon, PaintBrushIcon, PlusIcon, QuestionMarkCircleIcon, SparklesIcon, SpeakerWaveIcon, ViewfinderCircleIcon } from "./icons";
+import { ArrowDownTrayIcon, ArrowUturnLeftIcon, ArrowUturnRightIcon, BackwardIcon, BookmarkIcon, ChevronDownIcon, CursorArrowRaysIcon, FilmIcon, FlagIcon, FolderOpenIcon, ForwardIcon, InformationCircleIcon, ListBulletIcon, MagnifyingGlassPlusIcon, PauseIcon, PhotoIcon, PlayIcon, ScissorsIcon, StopIcon, TrashIcon, VideoCameraIcon } from "./icons";
 import { formatTime } from "./motion";
 
 const pct = (v: number) => `${Math.round(v * 100)}%`;
 /** Time with tenths, for the timecode and the lists. */
 const stamp = (t: number) => `${formatTime(t)}.${Math.floor((Math.max(0, t) % 1) * 10)}`;
 const bytes = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1e6))} MB`);
+const rateLabel = (r: number) => `${r}×`;
 type Tool = "zoom" | "clicks" | "sound" | "frame" | "camera";
-type Pane = "details" | "clicks" | "markers" | "quiet" | "marks";
+type Pane = "details" | "clicks" | "markers" | "quiet" | "speed" | "marks";
+type Sel = { kind: "piece" | "zoom"; i: number } | { kind: "manual" | "audio"; id: string } | null;
 const inMark = (m: Mark, t: number) => t >= m.a && t < m.b;
+/** Where to report problems and ideas (opens in the browser). */
+const FEEDBACK_URL = "https://github.com/TariqMehmood1004/Capturely/issues";
 
 /** Side panel, inspector and timeline sizes in px (the splitters change them). */
 interface Sizes {
@@ -61,10 +69,29 @@ function loadSizes(): Sizes {
   }
 }
 
+/** The look of a take never edited: what was chosen in the capture bar before recording. */
+function recordedStyle(d: TakeData): EditorStyle {
+  return { ...DEFAULT_STYLE, zoom: { ...d.zoom }, rings: d.ripples, camera: d.camera ? { ...DEFAULT_STYLE.camera, spot: d.camera.spot, size: d.camera.size } : DEFAULT_STYLE.camera };
+}
+
+/** The editor's keys, for the shortcut list. */
+const EDITOR_KEYS: ReadonlyArray<[string, string]> = [
+  ["Space", "Play or pause"],
+  ["← →", "Back or on one second"],
+  ["Home / End", "Go to the start or the end"],
+  ["S", "Split the clip at the playhead"],
+  ["Delete", "Remove the selected piece, zoom, mark or sound"],
+  ["Esc", "Clear the selection"],
+  ["Ctrl+Z", "Undo"],
+  ["Ctrl+Y / Ctrl+Shift+Z", "Redo"],
+];
+const HOTKEY_LABEL: Record<Hotkey["action"], string> = { record: "Start or stop recording", pause: "Pause or resume", marker: "Add a marker" };
+
 /**
  * The editor for a finished recording, laid out like ReeliF Studio: a rail and side panel
- * (details, clicks, markers), the player (tools, stage, transport), the inspector with tabs, and
- * the timeline across the bottom. Panels are separated by resizable splitters.
+ * (details, clicks, markers, quiet parts, speed, marks), the player (tools, stage, transport), the
+ * inspector with tabs, and the timeline across the bottom. Panels are separated by resizable
+ * splitters. Everything changed here is the take's edit (take.json), saved as it changes.
  */
 export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => void }) {
   const [info, setInfo] = useState<TakeInfo | null>(null);
@@ -80,27 +107,22 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     gsap.fromTo(panels, { y: MOTION.rise, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: MOTION.base, ease: MOTION.ease, stagger: 0.05, clearProps: "transform,opacity,visibility" });
   }, [info]);
   const [error, setError] = useState<string | null>(null);
-  const [zoomOn, setZoomOn] = useState(true);
-  const [depth, setDepth] = useState(1.8);
-  const [hold, setHold] = useState(1.5);
-  const [after, setAfter] = useState<AfterClick>("follow");
-  const [rings, setRings] = useState(true);
-  const [frame, setFrame] = useState<ScreenFrame | null>(null);
-  const [camOn, setCamOn] = useState(true);
-  const [spot, setSpot] = useState<BubbleSpot>("bottom-right");
-  const [camSize, setCamSize] = useState(0.22);
+  const [note, setNote] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [exporting, setExporting] = useState<number | null>(null);
   const [exported, setExported] = useState<string | null>(null);
+  /** Stops the running export (FFmpeg is ended and its partial file removed). */
+  const stopExport = useRef<(() => Promise<void>) | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const video = useRef<HTMLVideoElement | null>(null);
   const cam = useRef<HTMLVideoElement | null>(null);
-  const picture = useRef<HTMLVideoElement | null>(null);
+  const camBox = useRef<HTMLSpanElement | null>(null);
+  const zoomEl = useRef<HTMLDivElement | null>(null);
   const [tool, setTool] = useState<Tool>("zoom");
-  // Cuts and per-zoom changes, with undo; saved into take.json shortly after each change.
+  // The edit, with undo; saved into take.json shortly after each change.
   const [edit, setEditState] = useState<TakeEdit>(EMPTY_EDIT);
-  const [sel, setSel] = useState<{ kind: "piece" | "zoom"; i: number } | null>(null);
+  const [sel, setSel] = useState<Sel>(null);
   const editRef = useRef(edit);
   editRef.current = edit;
   const history = useRef<{ back: TakeEdit[]; fwd: TakeEdit[]; key: string; at: number }>({ back: [], fwd: [], key: "", at: 0 });
@@ -134,6 +156,10 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     dirty.current = true;
     setEditState(next);
   };
+  const style = edit.style;
+  const setStyle = (patch: Partial<EditorStyle>, key = "") => setEdit({ ...editRef.current, style: { ...editRef.current.style, ...patch } }, key);
+  const setZoom = (patch: Partial<EditorStyle["zoom"]>, key = "") => setStyle({ zoom: { ...editRef.current.style.zoom, ...patch } }, key);
+  const setCamera = (patch: Partial<CameraLook>, key = "") => setStyle({ camera: { ...editRef.current.style.camera, ...patch } }, key);
   // Export choices and saved looks, remembered on this computer.
   const [exp, setExp] = useState<ExportSettings>(() => load(EXPORT_KEY, validExport, DEFAULT_EXPORT));
   const [presets, setPresets] = useState<EditorPreset[]>(() => load(PRESETS_KEY, readPresets, []));
@@ -141,13 +167,16 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   useEffect(() => store(EXPORT_KEY, exp), [exp]);
   useEffect(() => store(PRESETS_KEY, presets), [presets]);
   const [room, setRoom] = useState({ w: 0, h: 0 });
-  // The font for text labels (and what else this system offers).
+  // The font for text labels (and what else this system offers), the shortcut keys, wallpapers.
   const [caps, setCaps] = useState<PlatformInfo | null>(null);
+  const [hotkeys, setHotkeys] = useState<Hotkey[]>([]);
+  const [wallpapers, setWallpapers] = useState<string[]>([]);
+  const [wallDir, setWallDir] = useState<string | null>(null);
   useEffect(() => {
-    void platform
-      .info()
-      .then(setCaps)
-      .catch(() => undefined);
+    void platform.info().then(setCaps, () => undefined);
+    void platform.hotkeys().then(setHotkeys, () => undefined);
+    void platform.media.wallpapersFolder().then(setWallDir, () => undefined);
+    void platform.media.wallpapers().then(setWallpapers, () => undefined);
   }, []);
   const [selMark, setSelMark] = useState<string | null>(null);
   // Quiet parts found (null: not looked for yet), the search's progress, and the choices.
@@ -155,62 +184,72 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const [finding, setFinding] = useState<number | null>(null);
   const [quietMin, setQuietMin] = useState(2);
   const [quietRate, setQuietRate] = useState<number>(4);
+  const [speedRate, setSpeedRate] = useState<number>(2);
+  /** A zoom placed by hand waiting for its spot to be clicked on the picture. */
+  const [pickSpot, setPickSpot] = useState<string | null>(null);
+  const [camImport, setCamImport] = useState<number | null>(null);
   const cursorEl = useRef<HTMLImageElement | null>(null);
   const sysAudio = useRef<HTMLAudioElement | null>(null);
   const micAudio = useRef<HTMLAudioElement | null>(null);
+  const clipEls = useRef(new Map<string, HTMLAudioElement>());
   const canvas = useRef<HTMLDivElement | null>(null);
   const lanes = useRef<HTMLDivElement | null>(null);
   const scrubbing = useRef(false);
 
-  useEffect(() => {
+  const reload = () =>
     platform
       .takeGet(take)
       .then((t) => {
         setInfo(t);
-        const d = t.data;
-        if (d) {
-          setZoomOn(d.zoom.on);
-          setDepth(d.zoom.depth);
-          setHold(d.zoom.hold);
-          setAfter(d.zoom.after);
-          setRings(d.ripples);
-          if (d.camera) {
-            setSpot(d.camera.spot);
-            setCamSize(d.camera.size);
-          }
-          setEditState(validEdit(d.edit));
-        }
+        return t;
       })
-      .catch((e: unknown) => setError(errorMessage(e)));
+      .catch((e: unknown) => {
+        setError(errorMessage(e));
+        return null;
+      });
+  useEffect(() => {
+    void reload().then((t) => t?.data && setEditState(validEdit(t.data.edit, recordedStyle(t.data))));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [take]);
 
   const data = info?.data ?? null;
   // The video's own length, once known: older takes saved a clock time a little past the picture.
   const [videoLen, setVideoLen] = useState<number | null>(null);
   const duration = videoLen && data ? Math.min(data.duration, videoLen) : (data?.duration ?? 0);
-  // Click zooms from the recording, then the changes made to single zooms.
+  // Clicks and the pointer path on the (cropped) picture.
+  const crop = style.crop;
+  const clicks = useMemo(() => (data?.clicks ?? []).map((c) => cropPoint(c, crop)), [data, crop]);
+  const path = useMemo(() => (data?.path ?? []).map((p) => cropPoint(p, crop)), [data, crop]);
+  const zl = style.zoom;
+  // Click zooms from the recording, then the changes made to single zooms, then zooms by hand.
   const regions = useMemo(() => {
-    if (!data || !data.clicks.length) return [];
-    const opts = { zoom: depth, hold, after };
-    return data.path.length ? pointerZooms(data.clicks, data.path, duration, opts) : clickRegions(data.clicks, duration, opts);
-  }, [data, depth, hold, after, duration]);
+    if (!clicks.length) return [];
+    const opts = { zoom: zl.depth, hold: zl.hold, after: zl.after };
+    return path.length ? pointerZooms(clicks, path, duration, opts) : clickRegions(clicks, duration, opts);
+  }, [clicks, path, zl.depth, zl.hold, zl.after, duration]);
   const zoomList = useMemo(() => editedZooms(regions, edit.zooms), [regions, edit.zooms]);
-  const keys = useMemo(() => (zoomOn ? regionKeys(zoomList.filter((r) => !r.off)) : []), [zoomOn, zoomList]);
+  const manual = edit.added;
+  const coveredByHand = (r: { start: number; end: number }) => manual.some((m) => m.a < r.end && m.b > r.start);
+  const keys = useMemo(() => regionKeys(withManual(zl.on ? zoomList.filter((r) => !r.off) : [], manual)), [zl.on, zoomList, manual]);
+  const keysRef = useRef(keys);
+  keysRef.current = keys;
   const cutsRef = useRef(edit.cuts);
   cutsRef.current = edit.cuts;
-  // The output's clock: cuts and sped-up stretches (core/timeline.ts).
+  // The output's clock: cuts and speed changes (core/timeline.ts).
   const segs = useMemo(() => segments(duration, edit.cuts, edit.speeds), [duration, edit.cuts, edit.speeds]);
   const segsRef = useRef(segs);
   segsRef.current = segs;
   const kept = outDuration(segs);
-  // The smooth cursor (takes recorded with it), drawn from the pointer path.
-  const smooth = data?.cursor === "smooth" && !!data.path.length;
+  // The smooth cursor (takes recorded with it), drawn from the pointer path with its effects.
+  const smooth = data?.cursor === "smooth" && path.length > 0;
   const look = edit.cursor;
-  const track = useMemo(() => (smooth && data ? cursorTrack(data.path, duration, look.smooth) : []), [smooth, data, duration, look.smooth]);
-  const trackRef = useRef(track);
-  trackRef.current = track;
+  const track = useMemo(() => (smooth ? cursorTrack(path, duration, look.smooth, look.loop) : []), [smooth, path, duration, look.smooth, look.loop]);
+  const poses = useMemo(() => cursorPoses(track, look, clicks.map((c) => c.t)), [track, look, clicks]);
+  const live = useRef({ poses, look, camera: style.camera, audio: edit.audio, playing });
+  live.current = { poses, look, camera: style.camera, audio: edit.audio, playing };
   const sounds = info?.sounds ?? [];
   const sep = info?.path.includes("\\") ? "\\" : "/";
+  const url = (ref: string) => (info ? refUrl(ref, info.path, wallDir) : "");
 
   // Saved into take.json a moment after the last change.
   useEffect(() => {
@@ -223,9 +262,14 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     return () => window.clearTimeout(id);
   }, [edit, info, take]);
 
-  // The preview follows the video frame by frame (the same curve as the export).
+  // The preview follows the video frame by frame (the same curves as the export). The picture,
+  // cursor and bubble move directly every frame; the page itself (timecode, playhead, marks) is
+  // drawn again at most 15 times a second while playing, and not at all while nothing changes,
+  // so an open editor costs next to nothing on slower computers.
   useEffect(() => {
     let raf = 0;
+    let seen: { t: number; paused: boolean; keys: unknown; live: unknown } | null = null;
+    let shownAt = 0;
     const tick = () => {
       const v = video.current;
       if (v) {
@@ -242,14 +286,28 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             t = next;
           }
         }
-        setTime(t);
-        // Sped-up stretches play faster (the separate sounds too); the cursor follows its track.
+        const L = live.current;
+        if (seen && seen.t === t && seen.paused === v.paused && seen.keys === keysRef.current && seen.live === L) {
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        seen = { t, paused: v.paused, keys: keysRef.current, live: L };
+        const ms = performance.now();
+        if (v.paused || ms - shownAt > 66) {
+          setTime(t);
+          shownAt = ms;
+        }
+        // Faster and slower stretches (the separate sounds too); the cursor follows its poses.
         const rate = rateAt(segsRef.current, t) || 1;
         if (v.playbackRate !== rate) v.playbackRate = rate;
-        const p = cursorAt(trackRef.current, t);
-        if (p && cursorEl.current) {
-          cursorEl.current.style.left = `${p.x * 100}%`;
-          cursorEl.current.style.top = `${p.y * 100}%`;
+        const p = poseAt(L.poses, t);
+        const ce = cursorEl.current;
+        if (p && ce) {
+          ce.style.left = `${p.x * 100}%`;
+          ce.style.top = `${p.y * 100}%`;
+          ce.style.transform = p.s !== 1 || p.a !== 0 ? `scale(${p.s.toFixed(3)}) rotate(${p.a.toFixed(4)}rad)` : "";
+          const b = blurAt(L.poses, t, L.look.blur, ce.parentElement?.clientHeight ?? 0);
+          ce.style.filter = b > 0.3 ? `blur(${b.toFixed(1)}px)` : "";
         }
         for (const a of [sysAudio.current, micAudio.current]) {
           if (!a) continue;
@@ -258,8 +316,20 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
           if (v.paused && !a.paused) a.pause();
           else if (!v.paused && a.paused) void a.play().catch(() => undefined);
         }
-        const z = viewAt(keys, t);
-        if (picture.current) picture.current.style.transform = `scale(${z.z}) translate(${-zoomView(z.fx, z.z) * 100}%, ${-zoomView(z.fy, z.z) * 100}%)`;
+        // Extra sound plays where it was placed.
+        for (const c of L.audio) {
+          const el = clipEls.current.get(c.id);
+          if (!el) continue;
+          const inside = t >= c.a && t < c.a + c.len;
+          const want = c.from + (t - c.a);
+          if (inside && Math.abs(el.currentTime - want) > 0.25) el.currentTime = want;
+          if (el.playbackRate !== rate) el.playbackRate = rate;
+          if ((!inside || v.paused) && !el.paused) el.pause();
+          else if (inside && !v.paused && el.paused) void el.play().catch(() => undefined);
+        }
+        const z = viewAt(keysRef.current, t);
+        if (zoomEl.current) zoomEl.current.style.transform = `scale(${z.z}) translate(${-zoomView(z.fx, z.z) * 100}%, ${-zoomView(z.fy, z.z) * 100}%)`;
+        if (camBox.current) camBox.current.style.transform = L.camera.zoomReact ? `scale(${camReact(z.z).toFixed(4)})` : "";
         const c = cam.current;
         if (c && Math.abs(c.currentTime - t) > 0.15) c.currentTime = t;
       }
@@ -267,7 +337,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [keys, duration]);
+  }, [duration]);
 
   useEffect(() => {
     const v = video.current;
@@ -278,7 +348,11 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     }
     if (sysAudio.current) sysAudio.current.volume = Math.min(1, s.system);
     if (micAudio.current) micAudio.current.volume = Math.min(1, s.mic);
-  }, [edit.sound, sounds.length, info]);
+    for (const c of edit.audio) {
+      const el = clipEls.current.get(c.id);
+      if (el) el.volume = Math.min(1, c.volume);
+    }
+  }, [edit.sound, edit.audio, sounds.length, info]);
 
   const toggle = () => {
     const v = video.current;
@@ -296,26 +370,21 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   };
 
   const ringNow = useMemo(() => {
-    if (!rings || !data) return [];
-    return data.clicks
+    if (!style.rings) return [];
+    return clicks
       .filter((c) => time >= c.t && time < c.t + RING_TIME)
       .map((c) => {
         const v = viewAt(keys, c.t);
         return { x: (c.x - zoomView(v.fx, v.z)) * v.z, y: (c.y - zoomView(v.fy, v.z)) * v.z, k: c.t };
       });
-  }, [rings, data, time, keys]);
+  }, [style.rings, clicks, time, keys]);
 
-  const currentLook = (name: string): EditorPreset => ({ name, zoom: { on: zoomOn, depth, hold, after }, rings, frame, camera: { on: camOn, spot, size: camSize }, export: exp });
+  const currentLook = (name: string): EditorPreset => {
+    const { crop: _crop, ...rest } = style;
+    return { name, style: rest, cursor: look, export: exp };
+  };
   const applyLook = (p: EditorPreset) => {
-    setZoomOn(p.zoom.on);
-    setDepth(p.zoom.depth);
-    setHold(p.zoom.hold);
-    setAfter(p.zoom.after);
-    setRings(p.rings);
-    setFrame(p.frame);
-    setCamOn(p.camera.on);
-    setSpot(p.camera.spot);
-    setCamSize(p.camera.size);
+    setEdit({ ...editRef.current, style: { ...p.style, crop: editRef.current.style.crop }, cursor: p.cursor });
     setExp(p.export);
   };
   const saveLook = () => {
@@ -328,30 +397,36 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const doExport = async () => {
     if (!data || !info) return;
     setError(null);
+    setNote(null);
     setExported(null);
     setExporting(0);
-    const useCam = camOn && !!info.camera;
-    const size = exportSize(data.width, data.height, exp.quality);
-    const fps = exportFps(exp, data.fps);
-    const gif = exp.format === "gif";
-    // Inputs after the recording, numbered in the order they are added.
-    const inputs: ExportInput[] = [];
-    const add = (n: ExportInput) => inputs.push(n);
-    const camera = useCam ? { spot, size: camSize, input: add("camera") } : null;
-    const cursor = smooth && look.on && track.length ? { track, look, input: add("cursor") } : null;
-    const s = edit.sound;
-    const sound = gif ? [] : sounds.length ? sounds.map((n) => ({ input: add(n), volume: n === "mic" ? s.mic : s.system, clean: n === "mic" && s.clean })) : info.audio ? [{ input: 0, volume: s.system, clean: s.clean }] : [];
-    const graph = buildExportGraph({ ...size, fps, keys, rings: rings ? data.clicks : [], frame, camera, gif, segments: segs, sound, cursor, marks: edit.marks, font: caps?.font ?? null });
     try {
-      const job = platform.takeExport(take, graph, inputs, kept, fps, exp.format, exp.encoding);
+      const plan = await planExport({ take, info, data, edit, exp, keys, clicks, poses: smooth ? poses : null, segs, font: caps?.font ?? null });
+      const job = platform.takeExport(take, plan.graph, plan.inputs, kept, plan.fps, exp.format, exp.encoding, exp.gifLoop);
+      stopExport.current = job.cancel;
       const off = await job.onProgress((p) => p >= 0 && setExporting(p));
       const out = await job.promise.finally(off);
       setExported(out);
-      setInfo(await platform.takeGet(take));
+      await reload();
     } catch (e) {
-      setError(`The export failed: ${errorMessage(e)}`);
+      // Stopped on purpose: nothing went wrong, so nothing to report.
+      if (!(typeof e === "object" && e && "code" in e && e.code === "cancelled")) setError(`The export failed: ${errorMessage(e)}`);
     } finally {
+      stopExport.current = null;
       setExporting(null);
+    }
+  };
+
+  const saveProject = async () => {
+    setError(null);
+    try {
+      // The latest change first, so the project has it.
+      if (info?.data) await platform.takeSave(take, { ...info.data, edit: editRef.current });
+      dirty.current = false;
+      const where = await platform.projectSave(take);
+      if (where) setNote(`Project saved: ${where.split(/[\\/]/).pop()}`);
+    } catch (e) {
+      setError(`The project could not be saved: ${errorMessage(e)}`);
     }
   };
 
@@ -372,24 +447,43 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     }
   };
 
-  const addMark = (kind: Mark["kind"]) => {
-    const m = newMark(kind, time, duration);
+  const addMark = (kind: Mark["kind"], extra: Partial<Mark> = {}) => {
+    const m = newMark(kind, time, duration, 3, extra);
     setEdit({ ...editRef.current, marks: [...editRef.current.marks, m] });
     setSelMark(m.id);
+    setPane("marks");
+  };
+  const addPicture = async () => {
+    setError(null);
+    try {
+      const f = await platform.media.pick(take, "image");
+      if (!f) return;
+      // The picture keeps its own shape (as a share of the video's height and width).
+      const img = new Image();
+      img.src = platform.mediaUrl(f.path);
+      await img.decode().catch(() => undefined);
+      const ar = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
+      const out = layout({ width: data?.width ?? 16, height: data?.height ?? 9 }, style).out;
+      const h = 0.3;
+      addMark("image", { file: f.reference, w: Math.min(0.9, (h * ar * out.height) / out.width), h });
+      await reload();
+    } catch (e) {
+      setError(`The picture could not be added: ${errorMessage(e)}`);
+    }
   };
   const changeMark = (id: string, patch: Partial<Mark>, key = "") => setEdit({ ...editRef.current, marks: editRef.current.marks.map((m) => (m.id === id ? fitMark({ ...m, ...patch }, duration) : m)) }, key);
   const deleteMark = (id: string) => {
     setEdit({ ...editRef.current, marks: editRef.current.marks.filter((m) => m.id !== id) });
     setSelMark(null);
   };
-  /** Drag a mark on the picture: move it, or (`size`) resize it from its corner. */
+  /** Drag a mark on the picture: move it, or (`size`) resize it from its corner (an arrow's end). */
   const dragMark = (m: Mark, mode: "move" | "size") => (e: ReactPointerEvent<HTMLElement>) => {
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
     setSelMark(m.id);
     setPane("marks");
-    const host = e.currentTarget.closest(m.kind === "blur" ? ".take-picture" : ".take-stage");
+    const host = e.currentTarget.closest(m.kind === "blur" ? ".take-zoom" : ".take-stage");
     if (!host) return;
     const r = host.getBoundingClientRect();
     const x0 = e.clientX;
@@ -407,7 +501,107 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     window.addEventListener("pointerup", up);
   };
 
-  // The picture is as large as the canvas allows while keeping the recording's shape.
+  // Zooms placed by hand.
+  const changeManual = (id: string, patch: Partial<ManualZoom>, key = "") => setEdit({ ...editRef.current, added: editRef.current.added.map((m) => (m.id === id ? fitManualZoom({ ...m, ...patch }, duration) : m)) }, key);
+  const addManual = () => {
+    const p = poseAt(poses, time);
+    const m = newManualZoom(time, duration, p ? { x: p.x, y: p.y } : undefined, zl.depth);
+    setEdit({ ...editRef.current, added: [...editRef.current.added, m] });
+    setSel({ kind: "manual", id: m.id });
+    setTool("zoom");
+  };
+  const suggest = () => {
+    const found = suggestZooms(path, duration, withManual(zl.on ? zoomList.filter((r) => !r.off) : [], manual), { zoom: zl.depth });
+    if (!found.length) return setNote("No new spots found: the pointer does not rest anywhere a zoom is not already.");
+    setEdit({ ...editRef.current, added: [...editRef.current.added, ...found] });
+    setNote(`${found.length} zoom${found.length === 1 ? "" : "s"} added where the pointer rests.`);
+  };
+  /** A click on the picture while a zoom waits for its spot: the spot under the click. */
+  const pickOnPicture = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!pickSpot) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const r = e.currentTarget.getBoundingClientRect();
+    const v = viewAt(keys, time);
+    const x = zoomView(v.fx, v.z) + (e.clientX - r.left) / r.width / v.z;
+    const y = zoomView(v.fy, v.z) + (e.clientY - r.top) / r.height / v.z;
+    changeManual(pickSpot, { x, y });
+    setPickSpot(null);
+  };
+
+  // Extra sound.
+  const addSound = async () => {
+    setError(null);
+    try {
+      const f = await platform.media.pick(take, "audio");
+      if (!f) return;
+      const clip: AudioClip = { id: `audio-${Date.now().toString(36)}`, file: f.reference, name: f.label, a: Math.min(time, Math.max(0, duration - 0.5)), len: Math.max(0.1, Math.min(f.duration ?? duration, duration)), from: 0, volume: 1 };
+      setEdit({ ...editRef.current, audio: [...editRef.current.audio, clip] });
+      setSel({ kind: "audio", id: clip.id });
+      setTool("sound");
+      await reload();
+    } catch (e) {
+      setError(`The sound could not be added: ${errorMessage(e)}`);
+    }
+  };
+  const changeClip = (id: string, patch: Partial<AudioClip>, key = "") => setEdit({ ...editRef.current, audio: editRef.current.audio.map((c) => (c.id === id ? { ...c, ...patch } : c)) }, key);
+  const deleteClip = (id: string) => {
+    setEdit({ ...editRef.current, audio: editRef.current.audio.filter((c) => c.id !== id) });
+    setSel(null);
+  };
+
+  // Speed regions.
+  const changeSpeed = (i: number, patch: Partial<{ a: number; b: number; rate: number }>) => {
+    const list = editRef.current.speeds.map((s, k) => (k === i ? { ...s, ...patch } : s)).map((s) => ({ ...s, a: Math.max(0, Math.min(s.a, s.b - 0.1)), b: Math.min(duration, Math.max(s.b, s.a + 0.1)) }));
+    setEdit({ ...editRef.current, speeds: list });
+  };
+
+  // Camera footage: upload, replace or remove.
+  const importCamera = async () => {
+    setError(null);
+    setCamImport(0);
+    try {
+      const job = platform.cameraImport(take);
+      const off = await job.onProgress((p) => p >= 0 && setCamImport(p));
+      const got = await job.promise.finally(off);
+      if (got) {
+        await reload();
+        setCamera({ on: true });
+      }
+    } catch (e) {
+      setError(`The camera footage could not be added: ${errorMessage(e)}`);
+    } finally {
+      setCamImport(null);
+    }
+  };
+  const removeCamera = () =>
+    void platform
+      .cameraRemove(take)
+      .then(reload)
+      .catch((e: unknown) => setError(errorMessage(e)));
+
+  /** Drag the camera bubble: it becomes placed by hand where it is let go. */
+  const dragCamera = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const stage = e.currentTarget.closest(".take-stage");
+    if (!stage) return;
+    const r = stage.getBoundingClientRect();
+    const box = e.currentTarget.getBoundingClientRect();
+    const start = { x: (box.left + box.width / 2 - r.left) / r.width, y: (box.top + box.height / 2 - r.top) / r.height };
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    setTool("camera");
+    const move = (ev: PointerEvent) => setCamera({ spot: "custom", x: start.x + (ev.clientX - x0) / r.width, y: start.y + (ev.clientY - y0) / r.height }, "cam-drag");
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  // The picture is as large as the canvas allows while keeping the video's shape.
   useLayoutEffect(() => {
     const el = canvas.current;
     if (!el) return;
@@ -432,10 +626,11 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const zoomChange = (z: { start: number; end: number }, patch: { zoom?: number; off?: boolean }, key = "") => {
     const cur = editRef.current.zooms.find((x) => x.at >= z.start && x.at < z.end);
     const next = { zoom: cur?.zoom, off: cur?.off, ...patch };
-    const clean = { ...(next.zoom !== undefined && Math.abs(next.zoom - depth) > 1e-6 ? { zoom: next.zoom } : {}), ...(next.off ? { off: true } : {}) };
+    const clean = { ...(next.zoom !== undefined && Math.abs(next.zoom - zl.depth) > 1e-6 ? { zoom: next.zoom } : {}), ...(next.off ? { off: true } : {}) };
     setEdit(editZoom(editRef.current, z, Object.keys(clean).length ? clean : null), key);
   };
-  /** Delete key: removes (or brings back) the selected piece, or turns the selected zoom off/on. */
+  /** Delete key: removes (or brings back) the selected piece, turns the selected zoom off/on, or
+   *  removes the selected mark, zoom placed by hand or sound. */
   const removeSel = () => {
     if (selMark) deleteMark(selMark);
     else if (sel?.kind === "piece") {
@@ -444,10 +639,13 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     } else if (sel?.kind === "zoom") {
       const z = zoomList[sel.i];
       if (z) zoomChange(z, { off: !z.off });
-    }
+    } else if (sel?.kind === "manual") {
+      setEdit({ ...editRef.current, added: editRef.current.added.filter((m) => m.id !== sel.id) });
+      setSel(null);
+    } else if (sel?.kind === "audio") deleteClip(sel.id);
   };
-  const keyState = useRef({ toggle, seekTo, time, splitHere, removeSel, undo, redo, clear: () => setSel(null) });
-  keyState.current = { toggle, seekTo, time, splitHere, removeSel, undo, redo, clear: () => setSel(null) };
+  const keyState = useRef({ toggle, seekTo, time, splitHere, removeSel, undo, redo, clear: () => (setSel(null), setPickSpot(null)) });
+  keyState.current = { toggle, seekTo, time, splitHere, removeSel, undo, redo, clear: () => (setSel(null), setPickSpot(null)) };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -480,13 +678,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
 
   // Panel sizes (Studio-style splitters), remembered on this computer; double-click resets.
   const [sizes, setSizes] = useState<Sizes>(loadSizes);
-  useEffect(() => {
-    try {
-      localStorage.setItem(SIZES_KEY, JSON.stringify(sizes));
-    } catch {
-      /* not remembered */
-    }
-  }, [sizes]);
+  useEffect(() => store(SIZES_KEY, sizes), [sizes]);
   const startResize = (key: keyof Sizes, dir: 1 | -1, axis: "x" | "y") => (e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -509,16 +701,27 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
   const [pane, setPane] = useState<Pane>("details");
 
   if (!info) return <div className="page">{error ? <p className="error-text">{error}</p> : <p className="muted-note">Opening the recording…</p>}</div>;
-  const ar = data ? data.width / data.height : 16 / 9;
-  // The stage is a size container, so its shorter side is a CSS length (container units).
-  const fcss = frame ? frameCss(frame, `${100 * Math.min(1, 1 / ar)}cqi`) : null;
+  const rec = { width: data?.width ?? 1920, height: data?.height ?? 1080 };
+  // The stage has the video's shape; the picture sits in it where the export puts it.
+  const L = layout(rec, style);
+  const ar = L.out.width / L.out.height;
+  const fcss = L.framed ? frameCss(style.frame ?? PLAIN_FRAME, L.out, L.box, url) : null;
   const stageW = room.w && room.h ? Math.min(room.w, room.h * ar) : 0;
-  const zooms = zoomOn ? zoomList.filter((r) => !r.off) : [];
+  const stageH = stageW / ar;
+  const camera = style.camera;
+  const cb = cameraBox(camera, L.out.width, L.out.height);
+  const pctW = (v: number) => `${(v / L.out.width) * 100}%`;
+  const pctH = (v: number) => `${(v / L.out.height) * 100}%`;
+  const cropVideo: CSSProperties | undefined = crop ? { position: "absolute", width: `${100 / crop.w}%`, height: `${100 / crop.h}%`, left: `${(-crop.x / crop.w) * 100}%`, top: `${(-crop.y / crop.h) * 100}%`, objectFit: "fill" } : undefined;
+  const zooms = zl.on ? zoomList.filter((r) => !r.off) : [];
   const parts = pieces(duration, edit.splits);
   const selPiece = sel?.kind === "piece" ? parts[sel.i] : undefined;
   const selZoom = sel?.kind === "zoom" ? zoomList[sel.i] : undefined;
+  const selManual = sel?.kind === "manual" ? manual.find((m) => m.id === sel.id) : undefined;
+  const selClip = sel?.kind === "audio" ? edit.audio.find((c) => c.id === sel.id) : undefined;
   const selPieceCut = selPiece ? isCut(edit.cuts, (selPiece.a + selPiece.b) / 2) : false;
   const at = (t: number) => `${(t / (duration || 1)) * 100}%`;
+  const width = (a: number, b: number) => `calc(${((Math.min(b, duration) - a) / (duration || 1)) * 100}% - 2px)`;
   const ticks = rulerTicks(duration);
   const zoomNow = viewAt(keys, time).z;
   const panes: ReadonlyArray<{ id: Pane; icon: typeof PhotoIcon; label: string }> = [
@@ -526,16 +729,23 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
     { id: "clicks", icon: ListBulletIcon, label: "Clicks" },
     { id: "markers", icon: FlagIcon, label: "Markers" },
     { id: "quiet", icon: BoltIcon, label: "Quiet" },
-    { id: "marks", icon: EyeSlashIcon, label: "Blur, text" },
+    { id: "speed", icon: ClockIcon, label: "Speed" },
+    { id: "marks", icon: PaintBrushIcon, label: "Marks" },
   ];
   const tabs: ReadonlyArray<{ id: Tool; icon: typeof PhotoIcon; label: string }> = [
     { id: "zoom", icon: MagnifyingGlassPlusIcon, label: "Zoom" },
     { id: "clicks", icon: CursorArrowRaysIcon, label: "Cursor" },
     { id: "sound", icon: SpeakerWaveIcon, label: "Sound" },
     { id: "frame", icon: PhotoIcon, label: "Frame" },
-    ...(info.camera ? [{ id: "camera" as const, icon: VideoCameraIcon, label: "Camera" }] : []),
+    { id: "camera", icon: VideoCameraIcon, label: "Camera" },
   ];
   const created = data?.createdAt ? new Date(data.createdAt) : null;
+  const fullOut = layout(rec, style, 1).out;
+  const scale = exportScale(exp, fullOut.width);
+  const outSize = layout(rec, style, scale).out;
+  const markIcon = (m: Mark) => (m.kind === "blur" ? EyeSlashIcon : m.kind === "text" ? ChatBubbleBottomCenterTextIcon : m.kind === "image" ? PhotoIcon : PaintBrushIcon);
+  const markName = (m: Mark) => (m.kind === "blur" ? "Blur" : m.kind === "text" ? m.text || "Text" : m.kind === "image" ? "Picture" : (SHAPES.find((s) => s.id === m.shape)?.label ?? "Shape"));
+  const hasAudioLane = edit.audio.length > 0;
 
   return (
     <main className="ed" ref={shell} style={{ "--lib": `${sizes.lib}px`, "--insp": `${sizes.insp}px`, "--tl": `${sizes.tl}px` } as CSSProperties}>
@@ -588,7 +798,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               </div>
               <div>
                 <dt>Source</dt>
-                <dd>{data?.source === "window" ? "Window" : data?.source === "area" ? "Area" : "Screen"}</dd>
+                <dd>{data?.source === "window" ? "Window" : data?.source === "area" ? "Area" : data?.source === "import" ? "Video file" : "Screen"}</dd>
               </div>
               <div>
                 <dt>Camera</dt>
@@ -612,6 +822,9 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               <span className="glide-pill" aria-hidden />
               <button className="btn" onClick={() => void platform.reveal(exported ?? info.video ?? info.path)}>
                 <FolderOpenIcon aria-hidden /> Show in folder
+              </button>
+              <button className="btn" onClick={() => void saveProject()} title="Save this edit as a .capturely file to open again later">
+                <DocumentArrowDownIcon aria-hidden /> Save project
               </button>
               {confirmDelete ? (
                 <button className="btn danger" onClick={() => void platform.takeDelete(take).then(onDeleted, (e: unknown) => setError(errorMessage(e)))} onBlur={() => setConfirmDelete(false)}>
@@ -671,6 +884,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             )}
           </div>
         )}
+
         {pane === "quiet" && (
           <div className="ed-pane" key="quiet">
             <div className="ed-pane-head">
@@ -693,7 +907,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                   <div className="ed-card">
                     <div className="ed-field">
                       <span>Speed up by</span>
-                      <Segmented wide label="Speed up by" value={quietRate} onChange={setQuietRate} options={SPEEDS.map((r) => ({ value: r, label: `${r}×` }))} />
+                      <Segmented wide label="Speed up by" value={quietRate} onChange={setQuietRate} options={SPEEDS.map((r) => ({ value: r, label: rateLabel(r) }))} />
                     </div>
                     <div className="ed-pane-actions glide">
                       <span className="glide-pill" aria-hidden />
@@ -716,7 +930,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                             <BoltIcon aria-hidden />
                             <span>
                               {stamp(q.a)}–{stamp(q.b)}
-                              <em>{cut ? "Cut" : sp ? `${sp.rate}× faster` : `${(q.b - q.a).toFixed(1)} s`}</em>
+                              <em>{cut ? "Cut" : sp ? `${rateLabel(sp.rate)} speed` : `${(q.b - q.a).toFixed(1)} s`}</em>
                             </span>
                           </button>
                           <button className={sp ? "ed-icon on" : "ed-icon"} onClick={() => setEdit(sp ? removeSpeeds(editRef.current, [q]) : addSpeeds(editRef.current, [q], quietRate))} aria-label={sp ? "Normal speed" : "Speed up"} title={sp ? "Back to normal speed" : `Speed up ${quietRate}×`}>
@@ -733,42 +947,86 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               ) : (
                 <p className="ed-empty">No quiet parts of {quietMin} s or longer.</p>
               ))}
-            {edit.speeds.length > 0 && (
-              <div className="ed-section-head">
-                <span>{edit.speeds.length} sped up</span>
-                <button className="ed-reset" onClick={() => setEdit({ ...editRef.current, speeds: [] })}>
-                  Normal speed
-                </button>
+          </div>
+        )}
+
+        {pane === "speed" && (
+          <div className="ed-pane" key="speed">
+            <div className="ed-pane-head">
+              <h3>Speed</h3>
+              <span className="ed-count">{edit.speeds.length}</span>
+            </div>
+            <p className="ed-hint">Play a stretch faster or in slow motion. Added at the playhead for 3 s; slowed sound keeps its pitch.</p>
+            <div className="ed-card">
+              <div className="ed-field">
+                <span>Speed</span>
+                <Segmented wide label="Speed" value={speedRate} onChange={setSpeedRate} options={RATES.map((r) => ({ value: r, label: rateLabel(r) }))} />
               </div>
-            )}
+              <button className="btn primary" onClick={() => setEdit(addSpeeds(editRef.current, [{ a: time, b: Math.min(duration, time + 3) }], speedRate))} disabled={!data || time > duration - 0.2}>
+                <PlusIcon aria-hidden /> Add at {stamp(time)}
+              </button>
+            </div>
+            {edit.speeds.map((s, i) => (
+              <div key={`${s.a}-${i}`} className="ed-card ed-mark on">
+                <button className="ed-row" onClick={() => seekTo(s.a)}>
+                  <ClockIcon aria-hidden />
+                  <span>
+                    {s.rate < 1 ? "Slow motion" : "Faster"} · {rateLabel(s.rate)}
+                    <em>
+                      {stamp(s.a)}–{stamp(s.b)}
+                    </em>
+                  </span>
+                </button>
+                <Segmented wide label="Speed of this stretch" value={s.rate} onChange={(rate) => changeSpeed(i, { rate })} options={RATES.map((r) => ({ value: r, label: rateLabel(r) }))} />
+                <div className="ed-mark-times">
+                  <button className="btn ghost" onClick={() => changeSpeed(i, { a: time })} title="Start at the playhead">
+                    From {stamp(s.a)}
+                  </button>
+                  <button className="btn ghost" onClick={() => changeSpeed(i, { b: time })} title="End at the playhead">
+                    To {stamp(s.b)}
+                  </button>
+                  <button className="ed-icon" onClick={() => setEdit({ ...editRef.current, speeds: editRef.current.speeds.filter((_, k) => k !== i) })} aria-label="Back to normal speed" title="Back to normal speed">
+                    <TrashIcon aria-hidden />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!edit.speeds.length && <p className="ed-empty">Everything plays at normal speed.</p>}
           </div>
         )}
 
         {pane === "marks" && (
           <div className="ed-pane" key="marks">
             <div className="ed-pane-head">
-              <h3>Blur and text</h3>
+              <h3>Marks</h3>
               <span className="ed-count">{edit.marks.length}</span>
             </div>
-            <div className="ed-pane-actions glide">
+            <div className="ed-pane-actions glide ed-mark-add">
               <span className="glide-pill" aria-hidden />
               <button className="btn" onClick={() => addMark("blur")}>
-                <EyeSlashIcon aria-hidden /> Add blur
+                <EyeSlashIcon aria-hidden /> Blur
               </button>
               <button className="btn" onClick={() => addMark("text")}>
-                <ChatBubbleBottomCenterTextIcon aria-hidden /> Add text
+                <ChatBubbleBottomCenterTextIcon aria-hidden /> Text
+              </button>
+              <button className="btn" onClick={() => void addPicture()}>
+                <PhotoIcon aria-hidden /> Picture
+              </button>
+              <button className="btn" onClick={() => addMark("shape")}>
+                <PaintBrushIcon aria-hidden /> Shape
               </button>
             </div>
-            <p className="ed-hint">Added at the playhead for 3 s. Drag it on the picture to move it; drag a blur's corner to resize it. A blur zooms with the recording; text stays put.</p>
+            <p className="ed-hint">Added at the playhead for 3 s. Drag on the picture to move; drag the corner dot to resize (an arrow's end). A blur zooms with the recording; the others stay put.</p>
             {edit.marks.some((m) => m.kind === "text") && caps && !caps.font && <p className="ed-note warn">No font was found on this computer, so text is left out of exports.</p>}
             {edit.marks.map((m) => {
               const on = m.id === selMark;
+              const Icon = markIcon(m);
               return (
                 <div key={m.id} className={on ? "ed-card ed-mark on" : "ed-card ed-mark"}>
                   <button className="ed-row" onClick={() => (setSelMark(on ? null : m.id), seekTo(m.a))}>
-                    {m.kind === "blur" ? <EyeSlashIcon aria-hidden /> : <ChatBubbleBottomCenterTextIcon aria-hidden />}
+                    <Icon aria-hidden />
                     <span>
-                      {m.kind === "blur" ? "Blur" : m.text || "Text"}
+                      {markName(m)}
                       <em>
                         {stamp(m.a)}–{stamp(m.b)}
                       </em>
@@ -780,6 +1038,27 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                         <>
                           <input className="ui-input" value={m.text ?? ""} maxLength={120} onChange={(e) => changeMark(m.id, { text: e.target.value }, `text-${m.id}`)} aria-label="Text" placeholder="Text" />
                           <Slider label="Size" value={m.size ?? 0.045} min={0.02} max={0.12} step={0.005} format={(v) => pct(v * 10)} onChange={(v) => changeMark(m.id, { size: v }, `size-${m.id}`)} />
+                        </>
+                      )}
+                      {m.kind === "shape" && (
+                        <>
+                          <Segmented wide label="Shape" value={m.shape ?? "rect"} onChange={(shape) => changeMark(m.id, shape === "arrow" ? { shape, fill: false } : { shape, w: Math.abs(m.w), h: Math.abs(m.h) })} options={SHAPES.map((s) => ({ value: s.id, label: s.label }))} />
+                          <div className="ui-swatches" role="radiogroup" aria-label="Colour">
+                            {SHAPE_COLORS.map((c) => (
+                              <button key={c} role="radio" aria-checked={m.color === c} aria-label={c} title={c} className={m.color === c ? "ui-swatch on" : "ui-swatch"} onClick={() => changeMark(m.id, { color: c })}>
+                                <i style={{ background: c }} aria-hidden />
+                              </button>
+                            ))}
+                          </div>
+                          <Slider label="Line" value={m.stroke ?? 0.008} min={0.002} max={0.03} step={0.001} format={(v) => pct(v * 10)} onChange={(v) => changeMark(m.id, { stroke: v }, `stroke-${m.id}`)} />
+                          {m.shape !== "arrow" && (
+                            <div className="ed-line">
+                              <span>
+                                <strong>Filled</strong>
+                              </span>
+                              <Switch on={!!m.fill} label="Filled" onChange={(fill) => changeMark(m.id, { fill })} />
+                            </div>
+                          )}
                         </>
                       )}
                       <div className="ed-mark-times">
@@ -805,9 +1084,49 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
       <section className="ed-player">
         <header className="ed-player-head">
           <span className="ed-player-title">Preview</span>
-          <span className="ed-chip">{data ? `${data.width}×${data.height}` : "—"}</span>
-          {zoomOn && zooms.length > 0 && <span className="ed-chip accent">{zooms.length} zooms</span>}
+          <span className="ed-chip">{`${L.out.width}×${L.out.height}`}</span>
+          {zooms.length + manual.length > 0 && <span className="ed-chip accent">{zooms.filter((r) => !coveredByHand(r)).length + manual.length} zooms</span>}
           <span className="grow" />
+          <Dropdown
+            label="Keyboard shortcuts"
+            width={340}
+            trigger={({ open, toggle }) => (
+              <button className={open ? "ed-icon on" : "ed-icon"} onClick={toggle} aria-expanded={open} aria-haspopup="dialog" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
+                <QuestionMarkCircleIcon aria-hidden />
+              </button>
+            )}
+          >
+            {() => (
+              <>
+                <span className="ui-pop-label">In the editor</span>
+                <dl className="ed-keys">
+                  {EDITOR_KEYS.map(([k, what]) => (
+                    <div key={k}>
+                      <dt>{what}</dt>
+                      <dd>
+                        <kbd>{k}</kbd>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                <span className="ui-pop-label">From any app</span>
+                <dl className="ed-keys">
+                  {hotkeys.map((h) => (
+                    <div key={h.action}>
+                      <dt>{HOTKEY_LABEL[h.action]}</dt>
+                      <dd>
+                        <kbd className={h.ready ? "" : "taken"}>{h.keys}</kbd>
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+                <p className="ui-pop-empty">Change the keys from any app in the capture bar's settings.</p>
+                <button className="btn ghost" onClick={() => void platform.openUrl(FEEDBACK_URL)}>
+                  <ChatBubbleLeftRightIcon aria-hidden /> Report a problem or an idea
+                </button>
+              </>
+            )}
+          </Dropdown>
           <Dropdown
             label="Presets"
             width={300}
@@ -850,7 +1169,8 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                           <span>
                             {p.name}
                             <em>
-                              {p.zoom.on ? `Zoom ${p.zoom.depth.toFixed(1)}×` : "No zoom"} · {p.frame ? "Frame" : "No frame"} · {p.export.format.toUpperCase()} {QUALITIES.find((q) => q.id === p.export.quality)?.label}
+                              {p.style.zoom.on ? `Zoom ${p.style.zoom.depth.toFixed(1)}×` : "No zoom"} · {p.style.frame ? "Frame" : "No frame"} · {p.style.aspect === "auto" ? "" : `${p.style.aspect} · `}
+                              {p.export.format.toUpperCase()} {QUALITIES.find((q) => q.id === p.export.quality)?.label}
                             </em>
                           </span>
                         </button>
@@ -861,7 +1181,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                     ))}
                   </div>
                 ) : (
-                  <p className="ui-pop-empty">No presets yet. Save the zoom, cursor, frame, camera and export choices under a name.</p>
+                  <p className="ui-pop-empty">No presets yet. Save the zoom, cursor, frame, camera, shape and export choices under a name.</p>
                 )}
               </>
             )}
@@ -882,19 +1202,41 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               <>
                 <span className="ui-pop-label">Export</span>
                 <Segmented wide label="Format" value={exp.format} onChange={(format) => setExp((s) => validExport({ ...s, format, fps: format === s.format ? s.fps : format === "gif" ? 15 : 60 }))} options={[{ value: "mp4", label: "MP4", sub: "Video with sound" }, { value: "gif", label: "GIF", sub: "Silent loop" }]} />
-                <span className="ui-pop-label">Quality</span>
-                <Segmented wide label="Quality" value={exp.quality} onChange={(quality) => setExp((s) => ({ ...s, quality }))} options={QUALITIES.map((q) => {
-                  const z = data ? exportSize(data.width, data.height, q.id) : null;
-                  return { value: q.id, label: q.label, sub: z ? `${z.width}×${z.height}` : "" };
-                })} />
-                {exp.format === "mp4" && (
+                {exp.format === "mp4" ? (
                   <>
+                    <span className="ui-pop-label">Quality</span>
+                    <Segmented
+                      wide
+                      label="Quality"
+                      value={exp.quality}
+                      onChange={(quality) => setExp((s) => ({ ...s, quality }))}
+                      options={QUALITIES.map((q) => {
+                        const z = layout(rec, style, qualityScale(q.id)).out;
+                        return { value: q.id, label: q.label, sub: `${z.width}×${z.height}` };
+                      })}
+                    />
                     <span className="ui-pop-label">Encoding</span>
                     <Segmented wide label="Encoding" value={exp.encoding} onChange={(encoding) => setExp((s) => ({ ...s, encoding }))} options={ENCODINGS.map((e) => ({ value: e.id, label: e.label }))} />
+                  </>
+                ) : (
+                  <>
+                    <span className="ui-pop-label">Size</span>
+                    <Segmented wide label="GIF size" value={exp.gifWidth} onChange={(gifWidth) => setExp((s) => ({ ...s, gifWidth }))} options={GIF_WIDTHS.map((w) => ({ value: w, label: w ? `${w}` : "Full", sub: w ? "px wide" : `${fullOut.width} px` }))} />
+                    <div className="ed-line">
+                      <span>
+                        <strong>Loop</strong>
+                        <em>{exp.gifLoop ? "Plays again and again" : "Plays once"}</em>
+                      </span>
+                      <Switch on={exp.gifLoop} label="Loop" onChange={(gifLoop) => setExp((s) => ({ ...s, gifLoop }))} />
+                    </div>
                   </>
                 )}
                 <span className="ui-pop-label">Frame rate</span>
                 <Segmented wide label="Frame rate" value={exp.fps} onChange={(fps) => setExp((s) => ({ ...s, fps }))} options={FPS_CHOICES[exp.format].map((f) => ({ value: f, label: data && f > data.fps ? `${f} · ${data.fps} max` : `${f} fps` }))} />
+                <p className="ui-pop-empty">
+                  {outSize.width}×{outSize.height} · {formatTime(kept)}
+                  {style.aspect !== "auto" ? ` · ${style.aspect}` : ""}
+                </p>
                 <button
                   className="ui-pop-go"
                   disabled={exporting !== null || !data}
@@ -908,47 +1250,72 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               </>
             )}
           </Dropdown>
+          {exporting !== null && (
+            <button className="ed-icon" onClick={() => void stopExport.current?.().catch(() => undefined)} aria-label="Stop exporting" title="Stop exporting">
+              <StopIcon aria-hidden />
+            </button>
+          )}
         </header>
 
         <div className="ed-stage" ref={canvas}>
           {stageW > 0 && (
-            <div className="take-stage" style={{ width: stageW, aspectRatio: String(ar), containerType: "inline-size", ...(fcss ? fcss.stage : {}) }}>
-              <div className="take-picture" style={fcss ? { position: "absolute", ...fcss.picture } : undefined}>
-                <video ref={(el) => void ((video.current = el), (picture.current = el))} src={info.video ? platform.mediaUrl(info.video) : undefined} onLoadedMetadata={(e) => setVideoLen(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : null)} onEnded={() => setPlaying(false)} onClick={toggle} preload="auto" />
+            <div className={pickSpot ? "take-stage picking" : "take-stage"} style={{ width: stageW, aspectRatio: String(ar), containerType: "inline-size" }}>
+              {fcss && <div className="take-bg" style={fcss.bg} aria-hidden />}
+              <div className="take-picture" style={fcss ? fcss.picture : undefined} onPointerDownCapture={pickOnPicture}>
+                <div className="take-zoom" ref={zoomEl}>
+                  <video ref={video} style={cropVideo} src={info.video ? platform.mediaUrl(info.video) : undefined} onLoadedMetadata={(e) => setVideoLen(Number.isFinite(e.currentTarget.duration) ? e.currentTarget.duration : null)} onEnded={() => setPlaying(false)} onClick={() => !pickSpot && toggle()} preload="auto" />
+                  {edit.marks
+                    .filter((m) => m.kind === "blur" && (inMark(m, time) || m.id === selMark))
+                    .map((m) => (
+                      <div key={m.id} className={["take-blur", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()} style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, width: `${m.w * 100}%`, height: `${m.h * 100}%` }} onPointerDown={dragMark(m, "move")}>
+                        {m.id === selMark && <i className="take-handle" onPointerDown={dragMark(m, "size")} aria-hidden />}
+                      </div>
+                    ))}
+                  {smooth && look.on && <img ref={cursorEl} className="take-cursor" src={cursorImg} alt="" style={{ height: `${cursorImageShare(look.size) * 100}%` }} draggable={false} />}
+                </div>
                 {ringNow.map((r) => (
                   <i key={r.k} className="take-ring" style={{ left: `${r.x * 100}%`, top: `${r.y * 100}%` }} />
                 ))}
-                {edit.marks
-                  .filter((m) => m.kind === "blur" && (inMark(m, time) || m.id === selMark))
-                  .map((m) => (
-                    <div key={m.id} className={[ "take-blur", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()} style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, width: `${m.w * 100}%`, height: `${m.h * 100}%` }} onPointerDown={dragMark(m, "move")}>
-                      {m.id === selMark && <i className="take-handle" onPointerDown={dragMark(m, "size")} aria-hidden />}
-                    </div>
-                  ))}
-                {smooth && look.on && <img ref={cursorEl} className="take-cursor" src={cursorImg} alt="" style={{ height: `${cursorImageShare(look.size) * 100}%` }} draggable={false} />}
+                {selManual && time >= selManual.a && time < selManual.b && <i className="take-spot" style={{ left: `${(((selManual.x - zoomView(viewAt(keys, time).fx, zoomNow)) * zoomNow) * 100).toFixed(2)}%`, top: `${(((selManual.y - zoomView(viewAt(keys, time).fy, zoomNow)) * zoomNow) * 100).toFixed(2)}%` }} aria-hidden />}
               </div>
+              {info.camera && camera.on && (
+                <span ref={camBox} className="take-cam" style={{ left: pctW(cb.x), top: pctH(cb.y), width: pctW(cb.size), borderRadius: `${camera.round * 50}%`, boxShadow: camera.shadow > 0.01 ? `0 ${(cb.size * 0.04 * stageW) / L.out.width}px ${(cb.size * 0.2 * stageW) / L.out.width}px rgba(0,0,0,${0.7 * camera.shadow})` : "none", transformOrigin: `${cb.ax === "center" ? "center" : cb.ax} ${cb.ay === "center" ? "center" : cb.ay}` }} onPointerDown={dragCamera} title="Drag to place the camera">
+                  <video ref={cam} src={platform.mediaUrl(info.camera)} muted preload="auto" style={{ transform: camera.mirror ? "scaleX(-1)" : "none", borderRadius: `${camera.round * 50}%` }} />
+                </span>
+              )}
+              {edit.marks
+                .filter((m) => (m.kind === "image" || m.kind === "shape") && (inMark(m, time) || m.id === selMark))
+                .map((m) => {
+                  const box = m.kind === "image" ? imageBox(m, L.out.width, L.out.height) : shapeSvg(m, L.out.width, L.out.height);
+                  const src = m.kind === "image" ? url(m.file ?? "") : `data:image/svg+xml;charset=utf-8,${encodeURIComponent((box as ReturnType<typeof shapeSvg>).svg)}`;
+                  const end = m.kind === "shape" && m.shape === "arrow" ? { left: `${(m.x + m.w) * 100}%`, top: `${(m.y + m.h) * 100}%` } : null;
+                  return (
+                    <div key={m.id} className={["take-art", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()}>
+                      <img src={src} alt="" draggable={false} style={{ left: pctW(box.x), top: pctH(box.y), width: pctW(box.w), height: pctH(box.h) }} onPointerDown={dragMark(m, "move")} />
+                      {m.id === selMark && <i className="take-handle" style={end ?? { left: pctW(box.x + box.w), top: pctH(box.y + box.h) }} onPointerDown={dragMark(m, "size")} aria-hidden />}
+                    </div>
+                  );
+                })}
               {edit.marks
                 .filter((m) => m.kind === "text" && (inMark(m, time) || m.id === selMark))
                 .map((m) => {
-                  const px = (m.size ?? 0.045) * (stageW / ar);
+                  const px = (m.size ?? 0.045) * stageH;
                   return (
                     <div key={m.id} className={["take-text", m.id === selMark ? "sel" : "", inMark(m, time) ? "" : "off"].join(" ").trim()} style={{ left: `${m.x * 100}%`, top: `${m.y * 100}%`, fontSize: px, padding: px * 0.4 }} onPointerDown={dragMark(m, "move")}>
                       {m.text || "Text"}
                     </div>
                   );
                 })}
-              {info.camera && camOn && (
-                <span className={`take-cam ${spot}`} style={{ width: `${camSize * 100}%` }}>
-                  <video ref={cam} src={platform.mediaUrl(info.camera)} muted preload="auto" />
-                </span>
-              )}
             </div>
           )}
           {sounds.includes("system") && info.path && <audio ref={sysAudio} src={platform.mediaUrl(`${info.path}${sep}system.m4a`)} preload="auto" />}
           {sounds.includes("mic") && info.path && <audio ref={micAudio} src={platform.mediaUrl(`${info.path}${sep}mic.m4a`)} preload="auto" />}
-          {(error || exported) && (
+          {edit.audio.map((c) => (
+            <audio key={c.id} ref={(el) => void (el ? clipEls.current.set(c.id, el) : clipEls.current.delete(c.id))} src={url(c.file)} preload="auto" />
+          ))}
+          {(error || exported || note || pickSpot) && (
             <p className={error ? "ed-note error" : "ed-note"} role={error ? "alert" : "status"}>
-              {error ?? `Exported and checked: ${exported?.split(/[\\/]/).pop()}`}
+              {error ?? (pickSpot ? "Click the picture where this zoom should go. Esc cancels." : (note ?? `Exported and checked: ${exported?.split(/[\\/]/).pop()}`))}
             </p>
           )}
         </div>
@@ -982,7 +1349,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
         <div className="ed-tabs glide" role="tablist" aria-label="Properties">
           <span className="glide-pill" aria-hidden />
           {tabs.map((t) => (
-            <button key={t.id} role="tab" aria-selected={tool === t.id} className={tool === t.id ? "ed-tab on" : "ed-tab"} onClick={() => setTool(t.id)}>
+            <button key={t.id} role="tab" aria-selected={tool === t.id} aria-label={t.label} title={t.label} className={tool === t.id ? "ed-tab on" : "ed-tab"} onClick={() => setTool(t.id)}>
               <t.icon aria-hidden />
               <span>{t.label}</span>
             </button>
@@ -991,6 +1358,34 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
         <div className="ed-panel" role="tabpanel" key={tool}>
           {tool === "zoom" && (
             <>
+              {selManual && (
+                <>
+                  <div className="ed-section-head">
+                    <span>
+                      Zoom by hand · {stamp(selManual.a)}–{stamp(selManual.b)}
+                    </span>
+                  </div>
+                  <div className="ed-card ed-sel">
+                    <Slider label="Zoom" value={selManual.zoom} min={1.1} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(v) => changeManual(selManual.id, { zoom: v }, `mz-${selManual.id}`)} />
+                    <Slider label="Across" value={selManual.x} min={0} max={1} step={0.01} format={pct} onChange={(x) => changeManual(selManual.id, { x }, `mx-${selManual.id}`)} />
+                    <Slider label="Down" value={selManual.y} min={0} max={1} step={0.01} format={pct} onChange={(y) => changeManual(selManual.id, { y }, `my-${selManual.id}`)} />
+                    <button className={pickSpot ? "btn primary" : "btn"} onClick={() => (seekTo(Math.max(time, selManual.a + 0.7)), setPickSpot(pickSpot ? null : selManual.id))}>
+                      <ViewfinderCircleIcon aria-hidden /> {pickSpot ? "Click the picture…" : "Choose the spot on the picture"}
+                    </button>
+                    <div className="ed-mark-times">
+                      <button className="btn ghost" onClick={() => changeManual(selManual.id, { a: time })} title="Start at the playhead">
+                        From {stamp(selManual.a)}
+                      </button>
+                      <button className="btn ghost" onClick={() => changeManual(selManual.id, { b: time })} title="End at the playhead">
+                        To {stamp(selManual.b)}
+                      </button>
+                      <button className="ed-icon" onClick={removeSel} aria-label="Delete this zoom" title="Delete (Delete key)">
+                        <TrashIcon aria-hidden />
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
               {selZoom && (
                 <>
                   <div className="ed-section-head">
@@ -1011,13 +1406,33 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                       </span>
                       <Switch on={!selZoom.off} label="This zoom" onChange={(on) => zoomChange(selZoom, { off: !on })} />
                     </div>
-                    {!selZoom.off && <Slider label="Zoom" value={selZoom.zoom} min={1.2} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(v) => zoomChange(selZoom, { zoom: v }, `zoom-${sel?.i}`)} />}
+                    {!selZoom.off && <Slider label="Zoom" value={selZoom.zoom} min={1.2} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(v) => zoomChange(selZoom, { zoom: v }, `zoom-${sel?.kind === "zoom" ? sel.i : ""}`)} />}
                   </div>
                 </>
               )}
               <div className="ed-section-head">
-                <span>All zooms</span>
-                <button className="ed-reset" onClick={() => (setDepth(1.8), setHold(1.5), setAfter("follow"), setZoomOn(true))}>
+                <span>Zooms by hand</span>
+                {manual.length > 0 && (
+                  <button className="ed-reset" onClick={() => setEdit({ ...editRef.current, added: [] })}>
+                    Remove all
+                  </button>
+                )}
+              </div>
+              <div className="ed-card">
+                <div className="ed-pane-actions glide">
+                  <span className="glide-pill" aria-hidden />
+                  <button className="btn" onClick={addManual} disabled={!data}>
+                    <PlusIcon aria-hidden /> Add zoom at {stamp(time)}
+                  </button>
+                  <button className="btn ghost" onClick={suggest} disabled={!path.length} title={path.length ? "Zoom where the pointer comes to rest" : "This recording has no pointer path"}>
+                    <SparklesIcon aria-hidden /> Suggest zooms
+                  </button>
+                </div>
+                <p className="ed-hint">{manual.length ? `${manual.length} placed by hand. They win over click zooms where they overlap.` : "Zoom in on any moment, even without a click."}</p>
+              </div>
+              <div className="ed-section-head">
+                <span>Zoom on clicks</span>
+                <button className="ed-reset" onClick={() => setZoom({ ...DEFAULT_STYLE.zoom })}>
                   Reset
                 </button>
               </div>
@@ -1027,16 +1442,16 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                     <strong>Zoom on clicks</strong>
                     <em>{data?.clicks.length ? `${zooms.length} zoom${zooms.length === 1 ? "" : "s"}` : "No clicks in this recording"}</em>
                   </span>
-                  <Switch on={zoomOn} label="Zoom on clicks" onChange={setZoomOn} />
+                  <Switch on={zl.on} label="Zoom on clicks" onChange={(on) => setZoom({ on })} />
                 </div>
               </div>
-              {zoomOn && (
+              {zl.on && (
                 <div className="ed-card">
-                  <Slider label="Depth" value={depth} min={1.2} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={setDepth} />
-                  <Slider label="Hold" value={hold} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={setHold} />
+                  <Slider label="Depth" value={zl.depth} min={1.2} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(depth) => setZoom({ depth }, "zoom-depth")} />
+                  <Slider label="Hold" value={zl.hold} min={0.5} max={4} step={0.1} format={(v) => `${v.toFixed(1)} s`} onChange={(hold) => setZoom({ hold }, "zoom-hold")} />
                   <div className="ed-field">
                     <span>When the mouse moves on</span>
-                    <Segmented wide label="When the mouse moves on" value={after} onChange={setAfter} options={[{ value: "follow", label: "Follow" }, { value: "zoomOut", label: "Zoom out" }]} />
+                    <Segmented wide label="When the mouse moves on" value={zl.after} onChange={(after) => setZoom({ after })} options={[{ value: "follow", label: "Follow" }, { value: "zoomOut", label: "Zoom out" }]} />
                   </div>
                 </div>
               )}
@@ -1052,9 +1467,9 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                 <div className="ed-line">
                   <span>
                     <strong>Click rings</strong>
-                    <em>{rings ? "A ring where you click" : "Off"}</em>
+                    <em>{style.rings ? "A ring where you click" : "Off"}</em>
                   </span>
-                  <Switch on={rings} label="Click rings" onChange={setRings} />
+                  <Switch on={style.rings} label="Click rings" onChange={(rings) => setStyle({ rings })} />
                 </div>
               </div>
               <p className="ed-hint">{data?.clicks.length ?? 0} clicks were recorded. Rings and zooms follow them.</p>
@@ -1078,14 +1493,32 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                     </div>
                   </div>
                   {look.on && (
-                    <div className="ed-card">
-                      <Slider label="Size" value={look.size} min={0.6} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(size) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, size } }, "cursor-size")} />
-                      <Slider label="Smoothing" value={look.smooth} min={0} max={1} step={0.05} format={pct} onChange={(v) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, smooth: v } }, "cursor-smooth")} />
-                    </div>
+                    <>
+                      <div className="ed-card">
+                        <Slider label="Size" value={look.size} min={0.6} max={3} step={0.1} format={(v) => `${v.toFixed(1)}×`} onChange={(size) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, size } }, "cursor-size")} />
+                        <Slider label="Smoothing" value={look.smooth} min={0} max={1} step={0.05} format={pct} onChange={(v) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, smooth: v } }, "cursor-smooth")} />
+                      </div>
+                      <div className="ed-section-head">
+                        <span>Motion</span>
+                      </div>
+                      <div className="ed-card">
+                        <Slider label="Click bounce" value={look.bounce} min={0} max={1} step={0.05} format={pct} onChange={(bounce) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, bounce } }, "cursor-bounce")} />
+                        <Slider label="Sway" value={look.sway} min={0} max={1} step={0.05} format={pct} onChange={(sway) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, sway } }, "cursor-sway")} />
+                        <Slider label="Motion blur" value={look.blur} min={0} max={1} step={0.05} format={pct} onChange={(blur) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, blur } }, "cursor-blur")} />
+                        <div className="ed-line">
+                          <span>
+                            <strong>Loop</strong>
+                            <em>{look.loop ? "Glides back to where it started" : "Ends where the mouse ended"}</em>
+                          </span>
+                          <Switch on={look.loop} label="Loop the cursor" onChange={(loop) => setEdit({ ...editRef.current, cursor: { ...editRef.current.cursor, loop } })} />
+                        </div>
+                      </div>
+                      <p className="ed-hint">Loop suits a video or GIF that plays again and again: the cursor ends where it began.</p>
+                    </>
                   )}
                 </>
               ) : (
-                <p className="ed-hint">This recording has its own cursor. Choose Cursor: Smooth in the capture bar's settings before recording to get a smooth, larger cursor here.</p>
+                <p className="ed-hint">This recording has its own cursor. Choose Cursor: Smooth in the capture bar's settings before recording to get a smooth, larger cursor with effects here.</p>
               )}
             </>
           )}
@@ -1099,7 +1532,7 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                 </button>
               </div>
               {!sounds.length && !info.audio ? (
-                <p className="ed-hint">This recording has no sound.</p>
+                <p className="ed-hint">This recording has no sound of its own.</p>
               ) : (
                 <>
                   <div className="ed-card">
@@ -1122,78 +1555,77 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
                       </div>
                     </div>
                   )}
-                  <p className="ed-hint">The preview plays up to 100%; louder volumes and the cleanup are applied when exporting.{sounds.length ? "" : " This recording keeps its sounds mixed, so they share one volume."}</p>
                 </>
               )}
+              <div className="ed-section-head">
+                <span>Extra sound</span>
+                <span className="ed-count">{edit.audio.length}</span>
+              </div>
+              <div className="ed-card">
+                <button className="btn" onClick={() => void addSound()}>
+                  <MusicalNoteIcon aria-hidden /> Add music or a voice-over at {stamp(time)}
+                </button>
+              </div>
+              {edit.audio.map((c) => {
+                const on = selClip?.id === c.id;
+                return (
+                  <div key={c.id} className={on ? "ed-card ed-mark on" : "ed-card ed-mark"}>
+                    <button className="ed-row" onClick={() => (setSel(on ? null : { kind: "audio", id: c.id }), seekTo(c.a))}>
+                      <MusicalNoteIcon aria-hidden />
+                      <span>
+                        {c.name}
+                        <em>
+                          {stamp(c.a)}–{stamp(c.a + c.len)}
+                        </em>
+                      </span>
+                    </button>
+                    {on && (
+                      <>
+                        <Slider label="Volume" value={c.volume} min={0} max={2} step={0.05} format={pct} onChange={(volume) => changeClip(c.id, { volume }, `clip-vol-${c.id}`)} />
+                        <div className="ed-mark-times">
+                          <button className="btn ghost" onClick={() => changeClip(c.id, { a: Math.min(time, duration - 0.1) })} title="Start at the playhead">
+                            From {stamp(c.a)}
+                          </button>
+                          <button className="btn ghost" onClick={() => time > c.a + 0.1 && changeClip(c.id, { len: time - c.a })} title="End at the playhead">
+                            To {stamp(c.a + c.len)}
+                          </button>
+                          <button className="ed-icon" onClick={() => deleteClip(c.id)} aria-label="Remove this sound" title="Remove (Delete key)">
+                            <TrashIcon aria-hidden />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              <p className="ed-hint">The preview plays up to 100%; louder volumes and the cleanup are applied when exporting. Extra sound is cut and sped up with the video.</p>
             </>
           )}
 
           {tool === "frame" && (
-            <>
-              <div className="ed-section-head">
-                <span>Background and frame</span>
-                {frame && (
-                  <button className="ed-reset" onClick={() => setFrame(DEFAULT_FRAME)}>
-                    Reset
-                  </button>
-                )}
-              </div>
-              <div className="ed-card">
-                <div className="ed-line">
-                  <span>
-                    <strong>Background and frame</strong>
-                    <em>{frame ? "Space, rounded corners, shadow" : "Off · the recording fills the video"}</em>
-                  </span>
-                  <Switch on={!!frame} label="Background and frame" onChange={(v) => setFrame(v ? DEFAULT_FRAME : null)} />
-                </div>
-              </div>
-              {frame && (
-                <>
-                  <div className="ed-card">
-                    <span className="ed-label">Background</span>
-                    <Swatches label="Background" value={frame.background} onChange={(id) => setFrame({ ...frame, background: id })} options={FRAME_BACKGROUNDS.map((b) => ({ id: b.id, label: b.label, paint: b.from === b.to ? b.from : `linear-gradient(135deg, ${b.from}, ${b.to})` }))} />
-                  </div>
-                  <div className="ed-card">
-                    <Slider label="Space" value={frame.padding} min={0} max={0.2} step={0.005} format={pct} onChange={(v) => setFrame({ ...frame, padding: v })} />
-                    <Slider label="Corners" value={frame.radius} min={0} max={0.1} step={0.0025} format={(v) => pct(v * 10)} onChange={(v) => setFrame({ ...frame, radius: v })} />
-                    <Slider label="Shadow" value={frame.shadow} min={0} max={1} step={0.05} format={pct} onChange={(v) => setFrame({ ...frame, shadow: v })} />
-                  </div>
-                </>
-              )}
-            </>
+            <FramePanel
+              style={style}
+              setStyle={setStyle}
+              wallpapers={wallpapers}
+              imageUrl={url}
+              onAddPicture={async () => {
+                try {
+                  const f = await platform.media.pick(take, "image");
+                  if (f) await reload();
+                  return f?.reference ?? null;
+                } catch (e) {
+                  setError(`The picture could not be added: ${errorMessage(e)}`);
+                  return null;
+                }
+              }}
+              onOpenWallpapers={() => {
+                void platform.media.wallpapers().then(setWallpapers, () => undefined);
+                if (wallDir) void platform.reveal(wallDir);
+              }}
+            />
           )}
 
-          {tool === "camera" && info.camera && (
-            <>
-              <div className="ed-section-head">
-                <span>Camera bubble</span>
-              </div>
-              <div className="ed-card">
-                <div className="ed-line">
-                  <span>
-                    <strong>Camera bubble</strong>
-                    <em>{camOn ? BUBBLE_SPOTS.find((s) => s.id === spot)?.label : "Hidden"}</em>
-                  </span>
-                  <Switch on={camOn} label="Camera bubble" onChange={setCamOn} />
-                </div>
-              </div>
-              {camOn && (
-                <div className="ed-card">
-                  <div className="ed-field">
-                    <span>Corner</span>
-                    <div className="ed-corners" role="radiogroup" aria-label="Camera corner">
-                      {BUBBLE_SPOTS.map((s) => (
-                        <button key={s.id} role="radio" aria-checked={spot === s.id} aria-label={s.label} title={s.label} className={spot === s.id ? `ed-corner ${s.id} on` : `ed-corner ${s.id}`} onClick={() => setSpot(s.id)}>
-                          <i aria-hidden />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <Slider label="Size" value={camSize} min={0.12} max={0.4} step={0.01} format={pct} onChange={setCamSize} />
-                </div>
-              )}
-            </>
-          )}
+          {tool === "camera" && <CameraPanel look={camera} hasCamera={!!info.camera} importing={camImport} setCamera={setCamera} onUpload={() => void importCamera()} onRemove={removeCamera} />}
         </div>
       </aside>
 
@@ -1212,8 +1644,11 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             <button className="btn ghost ed-tool-btn" onClick={splitHere} title="Split the clip at the playhead (S)">
               <ScissorsIcon aria-hidden /> Split
             </button>
-            <button className="btn ghost ed-tool-btn" onClick={removeSel} disabled={!selPiece && !selZoom} title="Delete key">
-              <TrashIcon aria-hidden /> {selPiece ? (selPieceCut ? "Restore piece" : "Delete piece") : selZoom ? (selZoom.off ? "Turn zoom on" : "Turn zoom off") : "Delete"}
+            <button className="btn ghost ed-tool-btn" onClick={addManual} title="Add a zoom at the playhead">
+              <MagnifyingGlassPlusIcon aria-hidden /> Zoom
+            </button>
+            <button className="btn ghost ed-tool-btn" onClick={removeSel} disabled={!selPiece && !selZoom && !selManual && !selClip} title="Delete key">
+              <TrashIcon aria-hidden /> {selPiece ? (selPieceCut ? "Restore piece" : "Delete piece") : selZoom ? (selZoom.off ? "Turn zoom on" : "Turn zoom off") : selManual ? "Delete zoom" : selClip ? "Remove sound" : "Delete"}
             </button>
           </div>
           <span className="ed-legend">
@@ -1224,10 +1659,10 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
           </span>
           <span className="grow" />
           {!isPlain(segs) && <span className="ed-chip accent">Final length {stamp(kept)}</span>}
-          <span className="ed-hint-inline">Click a piece or a zoom to select · S splits · Delete removes</span>
+          <span className="ed-hint-inline">Click a piece, zoom or sound to select · S splits · Delete removes</span>
         </div>
         <div className="ed-tl-body">
-          <div className="ed-tl-heads" aria-hidden>
+          <div className={hasAudioLane ? "ed-tl-heads with-audio" : "ed-tl-heads"} aria-hidden>
             <span className="ruler" />
             <span>
               <FilmIcon /> Video
@@ -1235,9 +1670,14 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             <span>
               <MagnifyingGlassPlusIcon /> Zoom
             </span>
+            {hasAudioLane && (
+              <span>
+                <MusicalNoteIcon /> Sound
+              </span>
+            )}
           </div>
           <div
-            className="ed-lanes"
+            className={hasAudioLane ? "ed-lanes with-audio" : "ed-lanes"}
             ref={lanes}
             role="slider"
             tabIndex={0}
@@ -1253,10 +1693,16 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
             }}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
-              const hit = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-piece], [data-zoom]") : null;
+              const hit = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-piece], [data-zoom], [data-manual], [data-audio]") : null;
               if (hit?.dataset.zoom) {
                 setSel({ kind: "zoom", i: Number(hit.dataset.zoom) });
                 setTool("zoom");
+              } else if (hit?.dataset.manual) {
+                setSel({ kind: "manual", id: hit.dataset.manual });
+                setTool("zoom");
+              } else if (hit?.dataset.audio) {
+                setSel({ kind: "audio", id: hit.dataset.audio });
+                setTool("sound");
               } else if (hit?.dataset.piece) setSel({ kind: "piece", i: Number(hit.dataset.piece) });
               else setSel(null);
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -1280,26 +1726,42 @@ export function TakePage({ take, onDeleted }: { take: string; onDeleted: () => v
               {parts.map((p, i) => {
                 const cut = isCut(edit.cuts, (p.a + p.b) / 2);
                 return (
-                  <span key={`${p.a}-${p.b}`} data-piece={i} className={[cut ? "cut" : "", sel?.kind === "piece" && sel.i === i ? "sel" : ""].join(" ").trim()} style={{ left: at(p.a), width: `calc(${((p.b - p.a) / (duration || 1)) * 100}% - 2px)` }}>
+                  <span key={`${p.a}-${p.b}`} data-piece={i} className={[cut ? "cut" : "", sel?.kind === "piece" && sel.i === i ? "sel" : ""].join(" ").trim()} style={{ left: at(p.a), width: width(p.a, p.b) }}>
                     {cut ? "Removed" : parts.length > 1 ? `Piece ${i + 1}` : info.name}
                   </span>
                 );
               })}
             </div>
-            <div className={zoomOn ? "ed-lane zooms" : "ed-lane zooms disabled"} aria-hidden>
-              {zoomList.map((r, i) => (
-                <span key={`${r.start}`} data-zoom={i} className={[r.off ? "off" : "", r.edited ? "edited" : "", sel?.kind === "zoom" && sel.i === i ? "sel" : ""].join(" ").trim()} style={{ left: at(r.start), width: `calc(${((r.end - r.start) / (duration || 1)) * 100}% - 2px)` }}>
-                  {r.off ? "Off" : `${r.zoom.toFixed(1)}×`}
+            <div className="ed-lane zooms" aria-hidden>
+              {zoomList.map((r, i) =>
+                coveredByHand(r) ? null : (
+                  <span key={`${r.start}`} data-zoom={i} className={[r.off || !zl.on ? "off" : "", r.edited ? "edited" : "", sel?.kind === "zoom" && sel.i === i ? "sel" : ""].join(" ").trim()} style={{ left: at(r.start), width: width(r.start, r.end) }}>
+                    {r.off || !zl.on ? "Off" : `${r.zoom.toFixed(1)}×`}
+                  </span>
+                ),
+              )}
+              {manual.map((m) => (
+                <span key={m.id} data-manual={m.id} className={["hand", sel?.kind === "manual" && sel.id === m.id ? "sel" : ""].join(" ").trim()} style={{ left: at(manualRegion(m).start), width: width(m.a, m.b) }} title="Zoom placed by hand">
+                  {`${m.zoom.toFixed(1)}×`}
                 </span>
               ))}
-              {!zoomList.length && <em>No clicks to zoom on</em>}
+              {!zoomList.length && !manual.length && <em>No zooms yet · add one at the playhead</em>}
             </div>
+            {hasAudioLane && (
+              <div className="ed-lane audio" aria-hidden>
+                {edit.audio.map((c) => (
+                  <span key={c.id} data-audio={c.id} className={sel?.kind === "audio" && sel.id === c.id ? "sel" : ""} style={{ left: at(c.a), width: width(c.a, c.a + c.len) }}>
+                    {c.name}
+                  </span>
+                ))}
+              </div>
+            )}
             {mergeSpans(edit.cuts, duration).map((c) => (
               <i key={`${c.a}`} className="ed-cutmask" style={{ left: at(c.a), width: at(c.b - c.a) }} aria-hidden />
             ))}
             {edit.speeds.map((x) => (
-              <i key={`sp-${x.a}`} className="ed-speedmask" style={{ left: at(x.a), width: at(x.b - x.a) }} aria-hidden>
-                <b>{x.rate}×</b>
+              <i key={`sp-${x.a}`} className={x.rate < 1 ? "ed-speedmask slow" : "ed-speedmask"} style={{ left: at(x.a), width: at(x.b - x.a) }} aria-hidden>
+                <b>{rateLabel(x.rate)}</b>
               </i>
             ))}
             <i className="ed-playhead" style={{ left: at(time) }} aria-hidden />
@@ -1318,4 +1780,3 @@ function rulerTicks(duration: number): number[] {
   for (let t = 0; t <= duration + 1e-6; t += step) out.push(t);
   return out;
 }
-

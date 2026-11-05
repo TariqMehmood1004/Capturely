@@ -1,7 +1,7 @@
 import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import logo from "./assets/capturely-logo.png";
-import { platform } from "./platform";
+import { listening, platform } from "./platform";
 import { FilmIcon, FolderOpenIcon } from "./ui/icons";
 import { LibraryPage } from "./ui/LibraryPage";
 import { reducedMotion } from "./ui/motion";
@@ -36,9 +36,7 @@ export default function App() {
       .firstTake()
       .then(show)
       .catch(() => show(null));
-    let off: (() => void) | null = null;
-    void platform.editor.onOpen(show).then((u) => (off = u));
-    return () => off?.();
+    return listening(platform.editor.onOpen(show));
   }, []);
 
   // The highlight glides between Library and the open recording.

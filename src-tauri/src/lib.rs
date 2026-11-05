@@ -5,6 +5,7 @@ mod clicks;
 mod error;
 mod hotkeys;
 mod jobs;
+mod media;
 mod recordings;
 mod redact;
 mod shell;
@@ -26,9 +27,19 @@ fn cancel_job(registry: State<'_, jobs::JobRegistry>, job_id: String) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Linux: WebKitGTK's DMA-BUF renderer makes windows lag or stay blank with some graphics
+    // drivers (NVIDIA, older Intel on X11); the shared-memory path works everywhere. A value the
+    // user set is kept.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
     tauri::Builder::default()
+        // First, so a second start only shows the running bar and ends.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| shell::bar_show(app.clone())))
         .plugin(tauri_plugin_log::Builder::new().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(hotkeys::plugin())
         .manage(jobs::JobRegistry::default())
         // The microphone and camera are for the recorder's own pages (nothing remote is loaded).
@@ -50,7 +61,13 @@ pub fn run() {
             let _ = webview;
         })
         .setup(|app| {
-            shell::place_bar(app.handle());
+            // Started at sign-in (`--background`, the installer's Run entry): only the tray icon
+            // and the shortcut keys until a key or the icon brings the bar up.
+            let background = std::env::args().any(|a| a == "--background");
+            shell::place_bar(app.handle(), !background);
+            if let Err(e) = shell::tray(app.handle()) {
+                log::warn!("tray icon: {e}");
+            }
             hotkeys::register(app.handle());
             Ok(())
         })
@@ -58,12 +75,23 @@ pub fn run() {
             cancel_job,
             platform_info,
             hotkeys::hotkeys,
+            hotkeys::hotkeys_set,
+            media::media_pick,
+            media::media_write,
+            media::wallpapers_list,
+            media::wallpapers_folder,
+            media::library_import,
+            media::camera_import,
+            media::camera_remove,
+            media::project_save,
+            media::project_open,
             capture::capture_targets,
             capture::capture_start,
             capture::capture_pause,
             capture::capture_cancel,
             capture::capture_finish,
             capture::capture_encoders,
+            capture::capture_alive,
             clicks::click_log_start,
             clicks::click_log_stop,
             recordings::take_create,
@@ -72,6 +100,7 @@ pub fn run() {
             recordings::take_delete,
             recordings::take_export,
             recordings::take_quiet,
+            recordings::take_thumb,
             redact::redact_start,
             redact::redact_stop,
             recordings::library_list,
@@ -81,7 +110,10 @@ pub fn run() {
             recordings::camera_finish,
             recordings::free_space,
             shell::bar_fit,
+            shell::bar_dock,
+            shell::bar_drag_end,
             shell::bar_show,
+            shell::bar_hide,
             shell::app_quit,
             shell::overlay_open,
             shell::overlay_move,

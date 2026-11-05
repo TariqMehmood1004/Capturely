@@ -25,7 +25,7 @@ const data = (duration: number): TakeData => ({
   ripples: true,
   camera: null,
 });
-const takes: TakeInfo[] = [
+const takes: TakeInfo[] = params.get("empty") ? [] : [
   ["Recording 2026-10-28 10.25.33", 31, 48],
   ["Product walkthrough", 94, 132],
   ["Bug report: export dialog", 12, 9],
@@ -44,6 +44,7 @@ const takes: TakeInfo[] = [
   sounds: [],
 }));
 
+let stopExport = () => undefined as void;
 const replies: Record<string, (args: Record<string, unknown>) => unknown> = {
   platform_info: () => ({ os: "windows", systemAudio: true, windowCapture: true, hidesFromCapture: true, blocked: null, font: "C:/Windows/Fonts/segoeuib.ttf" }),
   capture_targets: () => ({
@@ -66,12 +67,46 @@ const replies: Record<string, (args: Record<string, unknown>) => unknown> = {
   free_space: () => 120e9,
   library_list: () => takes,
   take_quiet: () => ({ freezes: [[2.1, 3.1]], silences: null }),
+  // An export runs until it is stopped (to work on the export button and its Stop).
+  take_export: () => new Promise((_, reject) => (stopExport = () => reject({ code: "cancelled", message: "The operation was cancelled." }))),
+  cancel_job: () => (stopExport(), true),
   take_get: (a) => takes.find((t) => t.path === a.take || t.name === a.take) ?? takes[0],
   editor_take: () => params.get("take"),
+  capture_alive: () => true,
+  // Recording in the browser preview: the bar goes through its countdown and recording states.
+  capture_start: () => ({ rect: { x: 0, y: 0, width: 1920, height: 1080 }, lead: 0, encoder: "intel" }),
+  take_create: () => "C:/Users/demo/Videos/Capturely/Preview take",
+  // The bar's side: ?dock=left or right to see it standing at a side.
+  bar_dock: () => params.get("dock") ?? "bottom",
+  bar_drag_end: () => params.get("dock") ?? "bottom",
+  take_thumb: () => Promise.reject(new Error("no stills in the browser preview")),
+  hotkeys_set: (a) => [
+    { action: "record", keys: a.action === "record" ? a.keys || "Alt+Shift+R" : "Alt+Shift+R", ready: true },
+    { action: "pause", keys: a.action === "pause" ? a.keys || "Alt+Shift+P" : "Alt+Shift+P", ready: true },
+    { action: "marker", keys: a.action === "marker" ? a.keys || "Alt+Shift+M" : "Alt+Shift+M", ready: true },
+  ],
+  wallpapers_list: () => [],
+  wallpapers_folder: () => "C:/Users/demo/Videos/Capturely/Wallpapers",
+  media_write: (a) => `media:${String((a as { name?: string }).name ?? "shape.png")}`,
+  // The dialogs: a picture (the app's logo) or a sound is "picked".
+  media_pick: (a) => (a.kind === "image" ? { reference: "media:logo.png", path: "/src/assets/capturely-logo.png", label: "logo.png", duration: null } : { reference: "media:music.mp3", path: "/none.mp3", label: "music.mp3", duration: 12 }),
+  project_save: () => "C:/Users/demo/Documents/Recording.capturely",
+  project_open: () => takes[1]!.path,
   "plugin:window|is_maximized": () => true,
-  "plugin:event|listen": () => ++ids,
+  // Events: listeners are kept by name; `emit` (and window.__emit in the console, e.g.
+  // __emit("overlay:tick", 3) on ?w=overlay) calls them, as Tauri would.
+  "plugin:event|listen": (a) => {
+    const name = String(a.event);
+    (listeners[name] ??= []).push(Number(a.handler));
+    return ++ids;
+  },
+  "plugin:event|emit": (a) => void emitLocal(String(a.event), a.payload),
 };
 let ids = 0;
+const listeners: Record<string, number[]> = {};
+function emitLocal(event: string, payload: unknown) {
+  for (const h of listeners[event] ?? []) (w[`_${h}`] as ((e: unknown) => void) | undefined)?.({ event, id: h, payload });
+}
 
 const w = window as unknown as Record<string, unknown>;
 w.__TAURI_INTERNALS__ = {
@@ -86,4 +121,5 @@ w.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined };
+w.__emit = emitLocal;
 if (label !== "editor") document.body.style.background = "#5b6475";

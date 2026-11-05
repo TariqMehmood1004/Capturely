@@ -2,7 +2,7 @@ import { gsap } from "gsap";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { BUBBLE_SPOTS, onRecording, recordingType, type BubbleSpot, type MonitorRect, type ScreenClick } from "../core/recorder";
 import type { AfterClick } from "../core/zoom";
-import { errorMessage, platform, type AreaRect, type CaptureTargets, type Encoder, type Hotkey, type PlatformInfo, type Quality, type ScreenArea, type TakeData } from "../platform";
+import { errorMessage, listening, platform, type AreaRect, type CaptureTargets, type Dock, type Encoder, type Hotkey, type PlatformInfo, type Quality, type ScreenArea, type TakeData } from "../platform";
 import {
   ArrowPathIcon,
   CheckIcon,
@@ -50,8 +50,10 @@ interface Prefs {
   /** The cursor: recorded as it is, drawn smoothly by the editor, or left out. */
   cursorMode: "real" | "smooth" | "hidden";
   fps: 30 | 60;
-  /** Who encodes the picture: the processor (x264) or a graphics card. */
+  /** Who encodes the picture: Auto (a graphics card that works here), the processor (x264), or one card. */
   encoder: Encoder;
+  /** Settings version: 2 moved the old default encoder (the processor) to Auto. */
+  v?: number;
   quality: Quality;
   /** FFmpeg's messages kept as capture.log in the take. */
   keepLog: boolean;
@@ -62,17 +64,20 @@ interface Prefs {
   speed: number;
 }
 const PREFS_KEY = "reelifcapture.prefs";
-const DEFAULT_PREFS: Prefs = { surface: "monitor", area: null, systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursorMode: "smooth", fps: 30, encoder: "cpu", quality: "high", keepLog: true, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1 };
+const DEFAULT_PREFS: Prefs = { surface: "monitor", area: null, systemAudio: true, mic: "", cam: "", spot: "bottom-right", camSize: "medium", clickZoom: true, zoomDepth: 1.8, zoomHold: 1.5, after: "follow", ripples: true, cursorMode: "smooth", fps: 30, encoder: "auto", quality: "high", keepLog: true, countdown: 3, limit: 0, noise: true, scriptOn: false, speed: 1, v: 2 };
 const BUBBLE_SIZE = { small: 0.17, medium: 0.22, large: 0.3 } as const;
 const NEXT_COUNTDOWN = { 0: 3, 3: 5, 5: 0 } as const;
 const MIN_FREE = 1.5e9;
-const ENCODER_LABEL: Record<Encoder, string> = { cpu: "CPU", nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
+const ENCODER_LABEL: Record<Encoder, string> = { auto: "Auto", cpu: "CPU", nvidia: "NVIDIA", intel: "Intel", amd: "AMD" };
 const QUALITY_NOTE: Record<Quality, string> = { standard: "Smaller files", high: "Sharp text, moderate files", best: "Sharpest, largest files" };
 function loadPrefs(): Prefs {
   try {
     const saved = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
     // Choices saved before the encoder setting had 60 fps as the default; 30 is the default now.
     if (saved.encoder === undefined) delete saved.fps;
+    // The processor was the saved default before Auto; it kept graphics card encoders unused.
+    if ((saved.v ?? 1) < 2 && saved.encoder === "cpu") saved.encoder = "auto";
+    saved.v = 2;
     // Before the smooth cursor there was only "Show cursor".
     const old = saved as Partial<Prefs> & { cursor?: boolean };
     if (old.cursorMode === undefined && old.cursor === false) old.cursorMode = "hidden";
@@ -169,12 +174,17 @@ const STEP_LABEL: Record<Step, string> = { save: "Saving the recording", video: 
 export default function Bar() {
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs);
   const set = (c: Partial<Prefs>) => setPrefs((p) => ({ ...p, ...c }));
-  const { surface, area, systemAudio, mic, cam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursorMode, fps, encoder, quality, keepLog, countdown, limit, noise, scriptOn, speed } = prefs;
+  const { surface, area, systemAudio, mic: savedMic, cam: savedCam, spot, camSize, clickZoom, zoomDepth, zoomHold, after, ripples, cursorMode, fps, encoder, quality, keepLog, countdown, limit, noise, scriptOn, speed } = prefs;
   const [phase, setPhase] = useState<Phase>("idle");
   const [panel, setPanel] = useState<Panel>(null);
   const [moreTab, setMoreTab] = useState<"recording" | "effects" | "script">("recording");
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [cams, setCams] = useState<MediaDeviceInfo[]>([]);
+  /** The lists are complete (ids readable): a saved device missing from them is unplugged. */
+  const [known, setKnown] = useState({ audio: false, video: false });
+  // A saved device that is not connected now counts as off (and comes back when plugged in again).
+  const mic = savedMic && (!known.audio || mics.some((d) => d.deviceId === savedMic)) ? savedMic : "";
+  const cam = savedCam && (!known.video || cams.some((d) => d.deviceId === savedCam)) ? savedCam : "";
   const [targets, setTargets] = useState<CaptureTargets | null>(null);
   // What this system can record (Windows: everything; Linux and macOS: see sys/mod.rs).
   const [caps, setCaps] = useState<PlatformInfo>({ os: "windows", systemAudio: true, windowCapture: true, hidesFromCapture: true, blocked: null });
@@ -192,6 +202,28 @@ export default function Bar() {
       .then(setKeys)
       .catch(() => undefined);
   }, []);
+  // Changing a shortcut key: the next key press with Ctrl, Alt, Shift or Win becomes the key.
+  const [binding, setBinding] = useState<Hotkey["action"] | null>(null);
+  useEffect(() => {
+    if (!binding) return;
+    const down = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") return setBinding(null);
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return;
+      const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Win"].filter(Boolean);
+      const reset = e.key === "Backspace" && !mods.length;
+      if (!mods.length && !reset) return setError("Hold Ctrl, Alt, Shift or Win with the key, so it does not clash with typing.");
+      const key = e.code.replace(/^Key/, "").replace(/^Digit/, "");
+      void platform
+        .hotkeysSet(binding, reset ? "" : [...mods, key].join("+"))
+        .then((list) => (setKeys(list), setError(null)))
+        .catch((err: unknown) => setError(errorMessage(err)))
+        .finally(() => setBinding(null));
+    };
+    window.addEventListener("keydown", down, true);
+    return () => window.removeEventListener("keydown", down, true);
+  }, [binding]);
   const keyOf = (a: Hotkey["action"]) => {
     const k = keys.find((x) => x.action === a && x.ready);
     return k ? ` (${k.keys})` : "";
@@ -199,10 +231,11 @@ export default function Bar() {
   // Graphics card encoders that work here (checked once, in the background).
   const [gpus, setGpus] = useState<Encoder[]>([]);
   useEffect(() => {
-    void platform
-      .captureEncoders()
-      .then(setGpus)
-      .catch(() => undefined);
+    // Not while Capturely starts (often with Windows): the first check starts each graphics
+    // card's encoder, which is heavy on slower computers. The answer is kept, so later starts
+    // only read it.
+    const id = window.setTimeout(() => void platform.captureEncoders().then(setGpus, () => undefined), 6000);
+    return () => window.clearTimeout(id);
   }, []);
   /** Clicks and the pointer path are logged for zooms, rings and the smooth cursor. */
   const logPointer = clickZoom || ripples || cursorMode === "smooth";
@@ -214,6 +247,8 @@ export default function Bar() {
   const [count, setCount] = useState(3);
   const [paused, setPaused] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  /** The encoder actually recording (shown on the clock's tooltip). */
+  const [activeEncoder, setActiveEncoder] = useState<Exclude<Encoder, "auto"> | null>(null);
   const [markers, setMarkers] = useState(0);
   const [step, setStep] = useState<Step>("save");
   const [progress, setProgress] = useState<number | null>(null);
@@ -228,20 +263,38 @@ export default function Bar() {
   const cancelled = useRef(false);
   /** What the overlay should show now; sent again whenever it (re)loads, so nothing is missed. */
   const overlayState = useRef<{ frame: boolean; n: number | null; paused: boolean }>({ frame: false, n: null, paused: false });
-  useEffect(() => {
-    let off: (() => void) | null = null;
-    void platform.overlay
-      .onReady(() => {
-        const s = overlayState.current;
-        platform.overlay.frame(s.frame);
-        if (s.n !== null) platform.overlay.tick(s.n);
-        if (s.paused) platform.overlay.paused(true);
-      })
-      .then((u) => (off = u));
-    return () => off?.();
-  }, []);
+  useEffect(
+    () =>
+      listening(
+        platform.overlay.onReady(() => {
+          const s = overlayState.current;
+          platform.overlay.frame(s.frame);
+          if (s.n !== null) platform.overlay.tick(s.n);
+          if (s.paused) platform.overlay.paused(true);
+        }),
+      ),
+    [],
+  );
   const lifted = useRef(false);
-  const settleTimer = useRef(0);
+  // Docked upright at the left or right edge of the screen, or lying along the bottom (bar_dock).
+  const [dock, setDock] = useState<Dock>("bottom");
+  const dockRef = useRef<Dock>("bottom");
+  dockRef.current = dock;
+  // The bar keeps its idle length through the countdown, recording and saving (for the side it
+  // lies or stands at), so its window does not jump to a new size at each step.
+  const idleSize = useRef<Partial<Record<Dock, number>>>({});
+  useLayoutEffect(() => {
+    const el = bar.current;
+    if (phase === "idle" && el) idleSize.current[dock] = dock === "bottom" ? el.offsetWidth : el.offsetHeight;
+  });
+  const held = phase !== "idle" ? idleSize.current[dock] : undefined;
+  const steady = held ? (dock === "bottom" ? { minWidth: held } : { minHeight: held }) : undefined;
+  const askDock = () =>
+    void platform.bar
+      .dock()
+      .then(setDock)
+      .catch(() => undefined);
+  useEffect(askDock, []);
 
   useEffect(() => {
     try {
@@ -257,13 +310,13 @@ export default function Bar() {
     if (!el) return;
     const fit = () => {
       const r = el.getBoundingClientRect();
-      void platform.bar.fit(Math.ceil(r.width), Math.ceil(r.height)).catch(() => undefined);
+      void platform.bar.fit(Math.ceil(r.width), Math.ceil(r.height), dockRef.current).catch(() => undefined);
     };
     const ro = new ResizeObserver(fit);
     ro.observe(el);
     fit();
     return () => ro.disconnect();
-  }, []);
+  }, [dock]);
 
   // The bar rises in once; each phase's contents and each panel enter with a short rise.
   useLayoutEffect(() => {
@@ -280,10 +333,9 @@ export default function Bar() {
     gsap.fromTo(card.current, { y: 10, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: MOTION.fast + 0.08, ease: MOTION.ease, clearProps: "transform,opacity,visibility" });
   }, [cardKey]);
 
-  // Moving the bar: it scales out a little while it travels and springs back when let go.
-  // The OS runs the drag, so "let go" is when the moves stop (or the press ends without one).
+  // Moving the bar: it scales out a little while it travels and springs back when let go. The OS
+  // runs the drag; Rust waits for the button to be let go (bar_drag_end) and says where it docks.
   const settle = () => {
-    window.clearTimeout(settleTimer.current);
     if (!lifted.current) return;
     lifted.current = false;
     shell.current?.classList.remove("moving");
@@ -297,49 +349,60 @@ export default function Bar() {
     lifted.current = true;
     shell.current?.classList.add("moving");
     if (!reducedMotion()) gsap.to([bar.current, card.current].filter(Boolean), { scale: 0.94, duration: 0.2, ease: "power3.out", overwrite: "auto" });
-    window.clearTimeout(settleTimer.current);
-    settleTimer.current = window.setTimeout(settle, 600);
     void platform.bar.drag().catch(settle);
-  };
-  useEffect(() => {
-    let off: (() => void) | null = null;
+    // Let go at a side of the screen: stand up there; anywhere else: lie flat.
     void platform.bar
-      .onMoved(() => {
-        if (!lifted.current) return;
-        window.clearTimeout(settleTimer.current);
-        settleTimer.current = window.setTimeout(settle, 260);
-      })
-      .then((u) => (off = u));
-    window.addEventListener("pointerup", settle);
-    return () => {
-      off?.();
-      window.removeEventListener("pointerup", settle);
-      window.clearTimeout(settleTimer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .dragEnd()
+      .then(setDock)
+      .catch(() => undefined)
+      .finally(settle);
+  };
 
   // A panel closes on Escape and when the bar loses focus.
   useEffect(() => {
     if (!panel) return;
     const key = (e: KeyboardEvent) => e.key === "Escape" && setPanel(null);
     window.addEventListener("keydown", key);
-    let off: (() => void) | null = null;
-    void platform.bar.onBlur(() => setPanel(null)).then((u) => (off = u));
+    const off = listening(platform.bar.onBlur(() => setPanel(null)));
     return () => {
       window.removeEventListener("keydown", key);
-      off?.();
+      off();
     };
   }, [panel]);
 
-  const listDevices = () =>
-    navigator.mediaDevices
-      ?.enumerateDevices()
-      .then((d) => {
-        setMics(d.filter((x) => x.kind === "audioinput" && x.deviceId));
-        setCams(d.filter((x) => x.kind === "videoinput" && x.deviceId));
-      })
-      .catch(() => undefined);
+  /**
+   * Microphones and cameras. Until one has been opened, the webview lists them without ids (or
+   * not at all), so with `ask` each kind is opened once (and closed again) and the list read again.
+   */
+  const listDevices = async (ask = false) => {
+    const md = navigator.mediaDevices;
+    if (!md) return;
+    const read = async () => {
+      const d = await md.enumerateDevices().catch(() => [] as MediaDeviceInfo[]);
+      setMics(d.filter((x) => x.kind === "audioinput" && x.deviceId));
+      setCams(d.filter((x) => x.kind === "videoinput" && x.deviceId));
+      // Before access is granted the webview lists each kind once, without an id.
+      const full = (kind: MediaDeviceKind) => d.filter((x) => x.kind === kind).every((x) => x.deviceId);
+      setKnown({ audio: full("audioinput"), video: full("videoinput") });
+      return d;
+    };
+    const d = await read();
+    if (!ask) return;
+    const unnamed = (kind: MediaDeviceKind) => !d.some((x) => x.kind === kind && x.deviceId);
+    const missing: Array<"audio" | "video"> = [...(unnamed("audioinput") ? ["audio" as const] : []), ...(unnamed("videoinput") ? ["video" as const] : [])];
+    if (!missing.length) return;
+    const blocked: string[] = [];
+    for (const kind of missing) {
+      try {
+        stopStream(await md.getUserMedia({ [kind]: true }));
+      } catch (e) {
+        // NotFoundError: there is none. NotAllowedError: Windows privacy settings keep apps out.
+        if (e instanceof DOMException && e.name === "NotAllowedError") blocked.push(kind === "audio" ? "Microphone" : "Camera");
+      }
+    }
+    await read();
+    if (blocked.length) setError(`Windows is not letting Capturely use the ${blocked.join(" and ").toLowerCase()}. Turn on Settings › Privacy › ${blocked.join(" / ")} › "Let desktop apps access", then open this panel again.`);
+  };
 
   const loadTargets = () =>
     void platform
@@ -352,6 +415,18 @@ export default function Bar() {
       .catch(() => undefined);
 
   const stopAll = () => run.current?.streams.forEach(stopStream);
+
+  // Microphones and cameras plugged in or out while Capturely runs.
+  const panelNow = useRef<Panel>(null);
+  panelNow.current = panel;
+  useEffect(() => {
+    const md = navigator.mediaDevices;
+    if (!md) return;
+    const changed = () => void listDevices(panelNow.current === "mic" || panelNow.current === "camera");
+    md.addEventListener("devicechange", changed);
+    return () => md.removeEventListener("devicechange", changed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     void listDevices();
@@ -431,17 +506,21 @@ export default function Bar() {
     let raf = 0;
     let last = now();
     const tick = (t: number) => {
-      setElapsed(seconds());
+      // The clock shows whole seconds: the bar re-renders when one passes, not every frame.
+      const s = Math.floor(seconds());
+      setElapsed((e) => (e === s ? e : s));
       if (limit && seconds() >= limit * 60) setOverLimit(true);
       if (!run.current?.pausedAt && prompter.current) prompter.current.scrollTop += ((t - last) / 1000) * 30 * speed;
       last = t;
-      raf = requestAnimationFrame(tick);
+      // Every frame only for the scrolling script; the clock alone needs a few updates a second.
+      raf = prompter.current ? requestAnimationFrame(tick) : window.setTimeout(() => tick(now()), 250);
     };
     raf = requestAnimationFrame(tick);
     // The timer also runs when the bar is minimized (no animation frames then).
     const id = window.setInterval(() => limit && seconds() >= limit * 60 && setOverLimit(true), 500);
     return () => {
       cancelAnimationFrame(raf);
+      window.clearTimeout(raf);
       window.clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -503,6 +582,7 @@ export default function Bar() {
     const onArea = src === "area" && prefs.area ? prefs.area : null;
     const started = await platform.captureStart({ kind: src, monitor: onArea ? onArea.monitor : monitorIdx, ...(onArea ? { area: { x: onArea.x, y: onArea.y, width: onArea.width, height: onArea.height } } : {}), window: windowId, fps, cursor: cursorMode === "real", systemAudio: caps.systemAudio && systemAudio, encoder, quality, keepLog });
     r.rect = started.rect;
+    setActiveEncoder(started.encoder);
     // The clock starts with the picture (FFmpeg started `lead` seconds ago), not before it.
     r.t0 = now() - started.lead * 1000;
     if (src !== "monitor" && r.rect) void platform.overlay.move(r.rect).catch(() => undefined);
@@ -520,7 +600,22 @@ export default function Bar() {
     if (!(e instanceof DOMException && e.name === "AbortError")) setError(errorMessage(e));
   };
 
+  /** Open the chosen microphone or camera, saying plainly when it is unplugged or in use. */
+  const openDevice = async (what: "microphone" | "camera", c: MediaStreamConstraints) => {
+    try {
+      return await navigator.mediaDevices.getUserMedia(c);
+    } catch (e) {
+      const name = e instanceof DOMException ? e.name : "";
+      if (name === "OverconstrainedError" || name === "NotFoundError") throw new Error(`The ${what} you chose is not connected. Plug it in or choose another in the ${what} panel.`);
+      if (name === "NotReadableError") throw new Error(`The ${what} is in use by another app, or Windows could not start it. Close the other app and try again.`);
+      if (name === "NotAllowedError") throw new Error(`Windows is not letting Capturely use the ${what}. Turn on Settings › Privacy › ${what === "camera" ? "Camera" : "Microphone"} › "Let desktop apps access".`);
+      throw e;
+    }
+  };
+
   const start = async () => {
+    // One start at a time (a key press and a click, or a key press seen twice).
+    if (run.current) return;
     setError(null);
     setPanel(null);
     if (src === "window" && !windowId) return setError("Choose the window to record.");
@@ -530,8 +625,8 @@ export default function Bar() {
     run.current = r;
     void platform.editor.minimize().catch(() => undefined);
     try {
-      r.micStream = mic ? await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: mic }, echoCancellation: true, noiseSuppression: noise, autoGainControl: noise } }) : null;
-      r.camStream = cam ? await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cam }, width: 1280, height: 720, frameRate: 30 } }) : null;
+      r.micStream = mic ? await openDevice("microphone", { audio: { deviceId: { exact: mic }, echoCancellation: true, noiseSuppression: noise, autoGainControl: noise } }) : null;
+      r.camStream = cam ? await openDevice("camera", { video: { deviceId: { exact: cam }, width: 1280, height: 720, frameRate: 30 } }) : null;
       r.streams = [r.micStream, r.camStream].filter((s): s is MediaStream => !!s);
       const d = new Date();
       const p2 = (v: number) => String(v).padStart(2, "0");
@@ -663,16 +758,32 @@ export default function Bar() {
       else if (a === "marker" && !paused) addMarker();
     }
   };
-  useEffect(() => {
-    let off: (() => void) | null = null;
-    void platform.onHotkey((a) => onKey.current(a)).then((u) => (off = u));
-    return () => off?.();
-  }, []);
+  useEffect(() => listening(platform.onHotkey((a) => onKey.current(a))), []);
 
   useEffect(() => {
     if (overLimit && phase === "recording") void stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overLimit, phase]);
+
+  // The capture can end on its own (the recorded window closed, a screen was unplugged): then
+  // stop and keep what was recorded instead of a clock running over nothing.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  useEffect(() => {
+    if (phase !== "recording") return;
+    const id = window.setInterval(() => {
+      void platform
+        .captureAlive()
+        .then((alive) => {
+          if (alive || run.current?.pausedAt) return;
+          window.clearInterval(id);
+          void stopRef.current().then(() => setError(src === "window" ? "The window you were recording was closed, so the recording stopped. What was recorded is kept." : "The recording stopped on its own (the screen went away). What was recorded is kept."));
+        })
+        .catch(() => undefined);
+    }, 1500);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   /** Drag out an area on the chosen screen (the main one when a window was chosen). */
   const pickArea = async () => {
@@ -692,7 +803,7 @@ export default function Bar() {
     setError(null);
     setPanel((cur) => (cur === p ? null : p));
     if (p === "source") loadTargets();
-    if (p === "mic" || p === "camera") void listDevices();
+    if (p === "mic" || p === "camera") void listDevices(true);
   };
 
   const monitor = targets?.monitors.find((m) => m.index === monitorIdx);
@@ -703,7 +814,7 @@ export default function Bar() {
   const pct = progress !== null && progress >= 0 ? Math.round(progress * 100) : null;
 
   return (
-    <div className="cb-shell" ref={shell} onMouseDown={(e) => e.target === e.currentTarget && setPanel(null)}>
+    <div className={`cb-shell dock-${dock}`} ref={shell} onMouseDown={(e) => e.target === e.currentTarget && setPanel(null)}>
       {cardKey && (
         <div className={`cb-card ${cardKey}`} ref={card} key={cardKey}>
           {cardKey === "error" && (
@@ -851,8 +962,19 @@ export default function Bar() {
                       <Segmented label="Frame rate" value={fps} onChange={(v) => set({ fps: v })} options={[{ value: 30, label: "30" }, { value: 60, label: "60" }]} />
                     </Setting>
                     {caps.os === "windows" && (
-                      <Setting title="Encoder" note={encoder === "cpu" ? (gpus.length ? "Processor; works everywhere" : "Processor; no graphics card encoder found") : "Graphics card; less work for the processor"}>
-                        <Segmented label="Encoder" value={gpus.includes(encoder) ? encoder : "cpu"} onChange={(v) => set({ encoder: v })} options={(["cpu", ...gpus] as Encoder[]).map((e) => ({ value: e, label: ENCODER_LABEL[e] }))} />
+                      <Setting
+                        title="Encoder"
+                        note={
+                          encoder === "auto"
+                            ? gpus.length
+                              ? `${ENCODER_LABEL[gpus[0]!]} graphics card; the processor stays cool`
+                              : "Processor; no graphics card encoder found"
+                            : encoder === "cpu"
+                              ? "Processor; works everywhere, runs warmer"
+                              : "Graphics card; less work for the processor"
+                        }
+                      >
+                        <Segmented label="Encoder" value={encoder === "auto" || encoder === "cpu" || gpus.includes(encoder) ? encoder : "auto"} onChange={(v) => set({ encoder: v })} options={(["auto", "cpu", ...gpus] as Encoder[]).map((e) => ({ value: e, label: ENCODER_LABEL[e] }))} />
                       </Setting>
                     )}
                     <Setting title="Quality" note={QUALITY_NOTE[quality]}>
@@ -867,10 +989,14 @@ export default function Bar() {
                     {keys.length > 0 && (
                       <div className="cb-keys" aria-label="Shortcut keys, from any app">
                         {keys.map((k) => (
-                          <span key={k.action} className={k.ready ? "" : "off"} title={k.ready ? "Works from any app" : "Another app already uses these keys"}>
-                            <kbd>{k.keys}</kbd> {k.action === "record" ? "Start / stop" : k.action === "pause" ? "Pause" : "Marker"}
+                          <span key={k.action} className={k.ready || binding === k.action ? "" : "off"} title={k.ready ? "Works from any app. Click to change." : "Another app already uses these keys. Click to choose others."}>
+                            <button className={binding === k.action ? "cb-key on" : "cb-key"} onClick={() => setBinding(binding === k.action ? null : k.action)} aria-label={`Change the keys for ${k.action}`}>
+                              <kbd>{binding === k.action ? "Press keys…" : k.keys}</kbd>
+                            </button>{" "}
+                            {k.action === "record" ? "Start / stop" : k.action === "pause" ? "Pause" : "Marker"}
                           </span>
                         ))}
+                        {binding && <em className="cb-key-hint">Hold Ctrl, Alt, Shift or Win and press a key. Backspace: back to the default. Esc: keep as it is.</em>}
                       </div>
                     )}
                     <Setting title="Cursor" note={cursorMode === "smooth" ? "Drawn smooth and larger in the editor" : cursorMode === "real" ? "Recorded as it is" : "Left out of the recording"}>
@@ -938,7 +1064,7 @@ export default function Bar() {
         </div>
       )}
 
-      <div className={`cb-bar glide ${phase}`} ref={bar}>
+      <div className={`cb-bar glide ${phase}${steady ? " steady" : ""}`} ref={bar} style={steady}>
         <span className="glide-pill" aria-hidden />
         <span className="cb-grip" onPointerDown={lift} title="Move the bar" aria-hidden>
           <i /><i /><i /><i /><i /><i />
@@ -977,7 +1103,7 @@ export default function Bar() {
             <button className="cb-icon" onClick={() => void platform.window.minimize()} aria-label="Minimize" title="Minimize">
               <MinusIcon aria-hidden />
             </button>
-            <button className="cb-icon" onClick={() => void platform.quit()} aria-label="Quit Capturely" title="Quit Capturely">
+            <button className="cb-icon" onClick={() => void platform.bar.hide()} aria-label="Hide Capturely" title={`Hide to the tray; shortcut keys keep working${keyOf("record")}. Quit from the tray icon.`}>
               <XMarkIcon aria-hidden />
             </button>
           </>
@@ -1001,7 +1127,7 @@ export default function Bar() {
         {phase === "recording" && (
           <>
             <span className={paused ? "rec-dot idle" : "rec-dot blink"} aria-hidden />
-            <span className="cb-time" aria-live="off">
+            <span className="cb-time" aria-live="off" title={activeEncoder ? `Encoding with ${activeEncoder === "cpu" ? "the processor" : `the ${ENCODER_LABEL[activeEncoder]} graphics card`}` : undefined}>
               {formatTime(elapsed)}
             </span>
             <span className="cb-status" onPointerDown={lift}>
@@ -1021,7 +1147,7 @@ export default function Bar() {
               {paused ? <PlayIcon aria-hidden /> : <PauseIcon aria-hidden />}
             </button>
             <button className="cb-stop" onClick={() => void stop()} title={`Stop and open the editor${keyOf("record")}`}>
-              <StopIcon aria-hidden /> Stop
+              <StopIcon aria-hidden /> <span>Stop</span>
             </button>
             <span className="cb-sep" aria-hidden />
             <button className="cb-icon" onClick={() => void platform.window.minimize()} aria-label="Minimize the bar" title="Minimize the bar (the recording continues)">

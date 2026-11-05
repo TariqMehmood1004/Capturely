@@ -1,9 +1,12 @@
 // Edits on a take, in the recording's own seconds: split points, removed stretches (cuts),
-// per-zoom changes (depth, or off), sped-up stretches, blur and text marks, and the sound and
-// smooth cursor settings. Kept in take.json (`edit`), all undoable. Pure.
-import { DEFAULT_CURSOR, type CursorLook } from "./cursor";
+// per-zoom changes (depth, or off), zooms placed by hand, sped-up and slowed-down stretches,
+// marks (blur, text, pictures, shapes), extra sound, the sound and smooth cursor settings, and
+// the take's look (core/style.ts). Kept in take.json (`edit`), all undoable. Pure.
+import { DEFAULT_CURSOR, validCursor, type CursorLook } from "./cursor";
+import { isImageRef } from "./frame";
 import { validMarks, type Mark } from "./marks";
-import type { ZoomRegion } from "./zoom";
+import { DEFAULT_STYLE, validStyle, type EditorStyle } from "./style";
+import { validManualZooms, type ManualZoom, type ZoomRegion } from "./zoom";
 
 export interface Span {
   a: number;
@@ -18,9 +21,22 @@ export interface ZoomEdit {
   off?: boolean;
 }
 
-/** A stretch played faster (quiet parts), in recording seconds. */
+/** A stretch played faster (quiet parts) or slower (rate below 1), in recording seconds. */
 export interface SpeedSpan extends Span {
   rate: number;
+}
+
+/** Extra sound (music, a voice-over) added to the take: the file ("media:<name>") starts at `a`
+ *  (recording seconds) and plays `len` seconds of it, from `from` seconds into the file. */
+export interface AudioClip {
+  id: string;
+  file: string;
+  /** The name to show (the file the user picked). */
+  name: string;
+  a: number;
+  len: number;
+  from: number;
+  volume: number;
 }
 
 /** Volumes (1 = as recorded, up to 2) and the microphone's noise cleanup. Without separate sound
@@ -40,9 +56,13 @@ export interface TakeEdit {
   marks: Mark[];
   sound: SoundLook;
   cursor: CursorLook;
+  /** Zooms placed by hand. */
+  added: ManualZoom[];
+  audio: AudioClip[];
+  style: EditorStyle;
 }
 
-export const EMPTY_EDIT: TakeEdit = { splits: [], cuts: [], zooms: [], speeds: [], marks: [], sound: DEFAULT_SOUND, cursor: DEFAULT_CURSOR };
+export const EMPTY_EDIT: TakeEdit = { splits: [], cuts: [], zooms: [], speeds: [], marks: [], sound: DEFAULT_SOUND, cursor: DEFAULT_CURSOR, added: [], audio: [], style: DEFAULT_STYLE };
 /** Shorter pieces than this are not made by a split. */
 export const MIN_PIECE = 0.1;
 
@@ -130,7 +150,16 @@ export function editZoom(edit: TakeEdit, region: { start: number; end: number },
   return { ...edit, zooms: [...rest, { at: round((region.start + region.end) / 2), ...change }] };
 }
 
-export function validEdit(v: unknown): TakeEdit {
+export function validAudio(v: unknown): AudioClip[] {
+  if (!Array.isArray(v)) return [];
+  const n = (x: unknown, lo: number, hi: number, d: number) => (typeof x === "number" && Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d);
+  return v
+    .filter((c): c is AudioClip => typeof c === "object" && c !== null && typeof c.id === "string" && isImageRef(c.file) && c.file.startsWith("media:"))
+    .map((c) => ({ id: c.id, file: c.file, name: typeof c.name === "string" ? c.name.slice(0, 120) : "Sound", a: round(n(c.a, 0, 1e6, 0)), len: round(n(c.len, 0.1, 1e6, 1)), from: round(n(c.from, 0, 1e6, 0)), volume: n(c.volume, 0, 2, 1) }));
+}
+
+/** A stored edit, repaired; `style` fills in the look for a take never edited (the recorder's choices). */
+export function validEdit(v: unknown, style: EditorStyle = DEFAULT_STYLE): TakeEdit {
   const o = (typeof v === "object" && v !== null ? v : {}) as Record<string, unknown>;
   const nums = (x: unknown) => (Array.isArray(x) ? x.filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0) : []);
   const spans = Array.isArray(o.cuts) ? o.cuts.filter((c): c is Span => typeof c === "object" && c !== null && typeof (c as Span).a === "number" && typeof (c as Span).b === "number") : [];
@@ -140,7 +169,6 @@ export function validEdit(v: unknown): TakeEdit {
         .map((z) => ({ at: z.at, ...(typeof z.zoom === "number" ? { zoom: Math.min(3, Math.max(1.1, z.zoom)) } : {}), ...(z.off ? { off: true } : {}) }))
     : [];
   const sound = (typeof o.sound === "object" && o.sound !== null ? o.sound : {}) as Record<string, unknown>;
-  const cursor = (typeof o.cursor === "object" && o.cursor !== null ? o.cursor : {}) as Record<string, unknown>;
   const vol = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? Math.min(2, Math.max(0, v)) : 1);
   return {
     splits: nums(o.splits),
@@ -149,11 +177,10 @@ export function validEdit(v: unknown): TakeEdit {
     speeds: validSpeeds(o.speeds),
     marks: validMarks(o.marks),
     sound: { system: vol(sound.system), mic: vol(sound.mic), clean: sound.clean === true },
-    cursor: {
-      on: cursor.on !== false,
-      size: typeof cursor.size === "number" && Number.isFinite(cursor.size) ? Math.min(3, Math.max(0.6, cursor.size)) : DEFAULT_CURSOR.size,
-      smooth: typeof cursor.smooth === "number" && Number.isFinite(cursor.smooth) ? Math.min(1, Math.max(0, cursor.smooth)) : DEFAULT_CURSOR.smooth,
-    },
+    cursor: validCursor(o.cursor),
+    added: validManualZooms(o.added),
+    audio: validAudio(o.audio),
+    style: validStyle(o.style, style),
   };
 }
 
@@ -161,11 +188,11 @@ export function validSpeeds(v: unknown): SpeedSpan[] {
   if (!Array.isArray(v)) return [];
   return v
     .filter((s): s is SpeedSpan => typeof s === "object" && s !== null && [s.a, s.b, s.rate].every((n) => typeof n === "number" && Number.isFinite(n)))
-    .filter((s) => s.b > s.a && s.a >= 0 && s.rate > 1 && s.rate <= 16)
+    .filter((s) => s.b > s.a && s.a >= 0 && s.rate >= 0.25 && s.rate <= 16 && Math.abs(s.rate - 1) > 1e-6)
     .map((s) => ({ a: round(s.a), b: round(s.b), rate: s.rate }));
 }
 
-/** Speed stretches up (replacing speed-ups they overlap). */
+/** Speed stretches up, or slow them down (replacing speed changes they overlap). */
 export function addSpeeds(edit: TakeEdit, spans: readonly Span[], rate: number): TakeEdit {
   const rest = edit.speeds.filter((s) => !spans.some((x) => x.a < s.b && x.b > s.a));
   return { ...edit, speeds: [...rest, ...spans.map((x) => ({ a: round(x.a), b: round(x.b), rate }))].sort((p, q) => p.a - q.a) };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_EXPORT, exportFps, exportSize, savePreset, validExport, validPreset } from "./exportSettings";
+import { DEFAULT_EXPORT, exportFps, exportScale, exportSize, savePreset, validExport, validPreset } from "./exportSettings";
 
 describe("export settings", () => {
   it("scales the recording per quality to even sizes", () => {
@@ -22,12 +22,20 @@ describe("export settings", () => {
 
   it("reads presets back and replaces one with the same name", () => {
     expect(validPreset({ name: "  " })).toBeNull();
+    // An older preset kept the look at the top.
     const a = validPreset({ name: "Demo", zoom: { depth: 9 } })!;
-    expect(a.zoom.depth).toBe(3);
-    expect(a.frame).toBeNull();
-    const b = { ...a, rings: false };
+    expect(a.style.zoom.depth).toBe(3);
+    expect(a.style.frame).toBeNull();
+    const b = { ...a, style: { ...a.style, rings: false } };
     const list = savePreset(savePreset([], a), { ...b, name: "demo" });
     expect(list).toHaveLength(1);
-    expect(list[0]!.rings).toBe(false);
+    expect(list[0]!.style.rings).toBe(false);
+  });
+
+  it("sizes a GIF by its width and keeps MP4 quality", () => {
+    expect(exportScale({ ...DEFAULT_EXPORT, format: "gif", gifWidth: 800 }, 1920)).toBeCloseTo(800 / 1920);
+    expect(exportScale({ ...DEFAULT_EXPORT, format: "gif", gifWidth: 0 }, 1920)).toBe(1);
+    expect(exportScale({ ...DEFAULT_EXPORT, quality: "low" }, 1920)).toBe(0.6);
+    expect(validExport({ format: "gif", gifWidth: 333, gifLoop: false })).toMatchObject({ gifWidth: 800, gifLoop: false });
   });
 });

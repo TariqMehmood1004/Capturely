@@ -33,3 +33,13 @@
   ${EndIf}
   Pop $0
 !macroend
+
+; Capturely starts hidden at sign-in (tray icon only), so Alt+Shift+R and the other keys work
+; from any app without opening it first. Per-machine install: one entry for every user.
+!macro NSIS_HOOK_POSTINSTALL
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "Capturely" '"$INSTDIR\${MAINBINARYNAME}.exe" --background'
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  DeleteRegValue HKLM "Software\Microsoft\Windows\CurrentVersion\Run" "Capturely"
+!macroend
